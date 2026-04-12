@@ -17,7 +17,7 @@ export default function Profile() {
     setSaving(true)
     setMsg(null)
     try {
-      await api.post(`/api/strava/tokens/${USER_ID}`, {
+      const r = await api.post(`/api/strava/tokens/${USER_ID}`, {
         access_token: accessToken,
         refresh_token: refreshToken,
         expires_at: 0,
