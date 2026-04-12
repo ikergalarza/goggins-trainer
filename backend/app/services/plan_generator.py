@@ -28,6 +28,7 @@ Reglas estrictas:
 - Responde SIEMPRE en español.
 - Devuelve EXCLUSIVAMENTE un JSON válido dentro de un bloque ```json ... ```. Después puedes añadir un párrafo corto de resumen del enfoque.
 - Periodiza el plan: base → construcción → específico → tapering antes de la fecha objetivo (si la hay).
+- IMPORTANTE: Si hay una fecha de carrera, el plan DEBE generar EXACTAMENTE el número de semanas indicado en `plan_target_weeks` y la última semana DEBE ser la semana de la competición. Incluye el día de la carrera como un workout específico (tipo `rest` o el más adecuado) con instrucciones de calentamiento y estrategia.
 - Respeta los días/semana que el atleta puede entrenar.
 - Combina entrenos suaves (Z2), tempo (Z3), umbral (Z4) y series (Z4-Z5). Para Hyrox, alterna running con estaciones de fuerza/funcional.
 - Usa SOLO estos `type` válidos: easy_run, tempo, intervals, long_run, recovery, fartlek, hill_repeats, hyrox_sim, hyrox_stations, strength_upper, strength_lower, strength_full, cross_training, rest.
@@ -173,12 +174,19 @@ def _parse_response(text: str) -> tuple[dict | None, str]:
 
 
 def _compute_weeks(goal: Goal) -> int:
-    """Calcula cuántas semanas tiene que durar el plan."""
-    if goal.target_race_date:
-        delta = goal.target_race_date - date.today()
-        weeks = max(1, min(20, (delta.days + 6) // 7))
-        return weeks
-    return 8  # plan genérico de 8 semanas si no hay fecha
+    """Cuántas semanas debe durar el plan, INCLUYENDO la semana de la carrera.
+
+    Calculamos la distancia en semanas entre el lunes de esta semana y el
+    lunes de la semana de la carrera, y le sumamos 1 para que la última
+    semana del plan sea siempre la semana de la competición.
+    """
+    if not goal.target_race_date:
+        return 8
+    today = date.today()
+    monday_this_week = today - timedelta(days=today.weekday())
+    race_monday = goal.target_race_date - timedelta(days=goal.target_race_date.weekday())
+    weeks_to_race = ((race_monday - monday_this_week).days // 7) + 1
+    return max(1, min(30, weeks_to_race))
 
 
 def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[str, Any]]:

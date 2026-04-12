@@ -6,6 +6,7 @@ import Activities from './pages/Activities'
 import Profile from './pages/Profile'
 import Records from './pages/Records'
 import Plan from './pages/Plan'
+import Chat from './pages/Chat'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="goals" element={<Goals />} />
         <Route path="plan" element={<Plan />} />
+        <Route path="chat" element={<Chat />} />
         <Route path="records" element={<Records />} />
         <Route path="activities" element={<Activities />} />
         <Route path="profile" element={<Profile />} />

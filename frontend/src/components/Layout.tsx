@@ -4,6 +4,7 @@ const nav = [
   { to: '/', label: '🏠 Dashboard' },
   { to: '/goals', label: '🎯 Objetivos' },
   { to: '/plan', label: '🗓️ Plan' },
+  { to: '/chat', label: '💀 Goggins' },
   { to: '/records', label: '🏆 Marcas' },
   { to: '/activities', label: '⚡ Actividades' },
   { to: '/profile', label: '👤 Perfil' },
