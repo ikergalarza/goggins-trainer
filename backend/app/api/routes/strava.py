@@ -160,6 +160,90 @@ def get_activities(
     ]
 
 
+@router.get("/weekly_stats/{user_id}")
+def weekly_stats(
+    user_id: int,
+    weeks: int = Query(default=12, ge=1, le=52),
+    db: Session = Depends(get_db),
+):
+    """Devuelve estadísticas semanales agregadas para las últimas N semanas."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.strava_activity import StravaActivity
+
+    since = datetime.now(timezone.utc) - timedelta(weeks=weeks + 1)
+
+    activities = (
+        db.query(StravaActivity)
+        .filter(StravaActivity.user_id == user_id)
+        .order_by(StravaActivity.start_date.desc())
+        .limit(500)
+        .all()
+    )
+
+    # Agrupar por lunes de la semana (ISO week starts Monday)
+    buckets: dict[str, dict] = {}
+    for a in activities:
+        if not a.start_date:
+            continue
+        try:
+            dt = a.start_date if isinstance(a.start_date, datetime) else datetime.fromisoformat(str(a.start_date).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt < since:
+            continue
+        # Lunes de la semana
+        monday = dt - timedelta(days=dt.weekday())
+        key = monday.strftime("%Y-%m-%d")
+        b = buckets.setdefault(key, {
+            "week_start": key,
+            "km": 0.0,
+            "time_min": 0.0,
+            "activities": 0,
+            "elevation_m": 0.0,
+            "hr_sum": 0.0,
+            "hr_count": 0,
+        })
+        b["km"] += (a.distance_m or 0) / 1000
+        b["time_min"] += (a.moving_time_s or 0) / 60
+        b["activities"] += 1
+        b["elevation_m"] += a.elevation_gain_m or 0
+        if a.average_heartrate:
+            b["hr_sum"] += a.average_heartrate
+            b["hr_count"] += 1
+
+    # Asegurar que las últimas `weeks` semanas existen aunque estén vacías
+    now = datetime.now(timezone.utc)
+    current_monday = now - timedelta(days=now.weekday())
+    for i in range(weeks):
+        monday = current_monday - timedelta(weeks=i)
+        key = monday.strftime("%Y-%m-%d")
+        buckets.setdefault(key, {
+            "week_start": key,
+            "km": 0.0,
+            "time_min": 0.0,
+            "activities": 0,
+            "elevation_m": 0.0,
+            "hr_sum": 0.0,
+            "hr_count": 0,
+        })
+
+    # Ordenar ascendente por fecha
+    result = []
+    for key in sorted(buckets.keys()):
+        b = buckets[key]
+        result.append({
+            "week_start": b["week_start"],
+            "km": round(b["km"], 1),
+            "time_min": round(b["time_min"]),
+            "activities": int(b["activities"]),
+            "elevation_m": round(b["elevation_m"]),
+            "avg_hr": round(b["hr_sum"] / b["hr_count"]) if b["hr_count"] > 0 else None,
+        })
+
+    # Limitamos al número pedido (por si hay más)
+    return result[-weeks:]
+
+
 @router.get("/status/{user_id}")
 def strava_status(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()

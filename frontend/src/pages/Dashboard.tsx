@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import StatCard from '../components/StatCard'
+import BarChart from '../components/BarChart'
 import api from '../api'
 
 const USER_ID = 1
@@ -33,6 +34,8 @@ export default function Dashboard() {
   const [insight, setInsight] = useState<any>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
+  const [weeklyStats, setWeeklyStats] = useState<any[]>([])
+  const [chartWeeks, setChartWeeks] = useState(12)
 
   useEffect(() => {
     api.get(`/api/strava/status/${USER_ID}`)
@@ -45,6 +48,12 @@ export default function Dashboard() {
     api.get(`/api/profile/${USER_ID}`).then(r => setProfile(r.data)).catch(() => {})
     api.get(`/api/ai/insights/${USER_ID}?kind=fitness_state`).then(r => setInsight(r.data)).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    api.get(`/api/strava/weekly_stats/${USER_ID}?weeks=${chartWeeks}`)
+      .then(r => setWeeklyStats(r.data))
+      .catch(() => {})
+  }, [chartWeeks])
 
   const handleAnalyze = async () => {
     setAnalyzing(true)
@@ -59,13 +68,16 @@ export default function Dashboard() {
     }
   }
 
-  const weeklyKm = activities
-    .filter(a => {
-      const d = new Date(a.start_date)
-      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-      return d >= weekAgo
-    })
-    .reduce((sum, a) => sum + (a.distance_km ?? 0), 0)
+  const weeklyKm = weeklyStats.length > 0
+    ? weeklyStats[weeklyStats.length - 1].km
+    : 0
+
+  const avg4wKm = weeklyStats.length >= 4
+    ? weeklyStats.slice(-4).reduce((s, w) => s + w.km, 0) / 4
+    : weeklyStats.reduce((s, w) => s + w.km, 0) / Math.max(weeklyStats.length, 1)
+
+  const total12wKm = weeklyStats.reduce((s, w) => s + w.km, 0)
+  const total12wMin = weeklyStats.reduce((s, w) => s + w.time_min, 0)
 
   const handleSync = async (syncAll = false) => {
     setSyncing(true)
@@ -129,9 +141,63 @@ export default function Dashboard() {
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Km esta semana" value={weeklyKm.toFixed(1)} unit="km" color="red" />
-        <StatCard label="Actividades" value={activities.length} unit="recientes" color="blue" />
-        <StatCard label="Strava" value={stravaConnected ? '✅ Conectado' : '❌ Off'} color={stravaConnected ? 'green' : 'red'} />
-        <StatCard label="Objetivos" value="—" sub="Configura en Objetivos" color="purple" />
+        <StatCard label="Media 4 sem" value={avg4wKm.toFixed(1)} unit="km/sem" color="blue" />
+        <StatCard label="Total 12 sem" value={total12wKm.toFixed(0)} unit="km" color="green" />
+        <StatCard label="Tiempo 12 sem" value={(total12wMin / 60).toFixed(0)} unit="horas" color="purple" />
+      </div>
+
+      {/* Gráficas volumen semanal */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="font-black text-lg">📊 Volumen semanal</h2>
+          <div className="flex gap-1">
+            {[6, 12, 26, 52].map(n => (
+              <button
+                key={n}
+                onClick={() => setChartWeeks(n)}
+                className={`px-3 py-1 rounded text-xs font-bold transition-colors ${
+                  chartWeeks === n
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                {n}s
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {weeklyStats.length === 0 ? (
+          <p className="text-sm text-gray-600">Sin datos todavía. Sincroniza Strava.</p>
+        ) : (
+          <div className="space-y-6">
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-2">Kilómetros / semana</p>
+              <BarChart
+                data={weeklyStats.map(w => ({
+                  label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
+                  value: w.km,
+                }))}
+                unit=" km"
+                color="bg-red-500"
+                height={180}
+              />
+            </div>
+
+            <div>
+              <p className="text-xs text-gray-500 uppercase mb-2">Minutos / semana</p>
+              <BarChart
+                data={weeklyStats.map(w => ({
+                  label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
+                  value: w.time_min,
+                }))}
+                unit=" min"
+                color="bg-blue-500"
+                height={120}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Análisis IA */}
