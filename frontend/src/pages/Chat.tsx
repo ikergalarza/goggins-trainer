@@ -3,11 +3,29 @@ import api from '../api'
 
 const USER_ID = 1
 
+interface ToolEvent {
+  name: string
+  ok?: boolean
+  summary?: string
+  input?: any
+  state: 'running' | 'done' | 'error'
+}
+
 interface Message {
   id?: number
   role: 'user' | 'assistant'
   content: string
   created_at?: string
+  toolEvents?: ToolEvent[]
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  list_workouts: 'Consultando tu plan',
+  move_workout: 'Moviendo entreno',
+  update_workout: 'Actualizando entreno',
+  delete_workout: 'Eliminando entreno',
+  add_workout: 'Añadiendo entreno',
+  mark_workout_status: 'Marcando entreno',
 }
 
 const SUGGESTIONS = [
@@ -23,6 +41,7 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
+  const [streamTools, setStreamTools] = useState<ToolEvent[]>([])
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -49,6 +68,7 @@ export default function Chat() {
     setMessages(prev => [...prev, { role: 'user', content: message }])
     setStreaming(true)
     setStreamText('')
+    setStreamTools([])
 
     const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) || ''
     const url = `${baseUrl}/api/chat/${USER_ID}/send_stream`
@@ -67,6 +87,8 @@ export default function Chat() {
       const decoder = new TextDecoder()
       let buffer = ''
       let accumulated = ''
+      let tools: ToolEvent[] = []
+      let hadMutation = false
 
       while (true) {
         const { done, value } = await reader.read()
@@ -89,9 +111,32 @@ export default function Chat() {
           if (payload.phase === 'chunk') {
             accumulated += payload.text || ''
             setStreamText(accumulated)
+          } else if (payload.phase === 'tool_use') {
+            tools = [...tools, { name: payload.name, input: payload.input, state: 'running' }]
+            setStreamTools(tools)
+          } else if (payload.phase === 'tool_result') {
+            // Mark the last running tool with this name as done/error
+            const idx = [...tools].reverse().findIndex(t => t.name === payload.name && t.state === 'running')
+            if (idx >= 0) {
+              const realIdx = tools.length - 1 - idx
+              tools = tools.map((t, i) => i === realIdx
+                ? { ...t, state: payload.ok ? 'done' : 'error', ok: payload.ok, summary: payload.summary }
+                : t)
+              setStreamTools(tools)
+            }
+          } else if (payload.phase === 'mutation') {
+            hadMutation = true
           } else if (payload.phase === 'done') {
-            setMessages(prev => [...prev, { role: 'assistant', content: payload.content || accumulated }])
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: payload.content || accumulated,
+              toolEvents: tools.length > 0 ? tools : undefined,
+            }])
             setStreamText('')
+            setStreamTools([])
+            if (hadMutation) {
+              window.dispatchEvent(new CustomEvent('plan-mutated'))
+            }
           } else if (payload.phase === 'error') {
             throw new Error(payload.detail || 'Error desconocido')
           }
@@ -100,6 +145,7 @@ export default function Chat() {
     } catch (e: any) {
       setError(e?.message || String(e))
       setStreamText('')
+      setStreamTools([])
     } finally {
       setStreaming(false)
     }
@@ -172,6 +218,9 @@ export default function Chat() {
               {m.role === 'assistant' && (
                 <p className="text-[10px] font-black text-red-400 uppercase tracking-wider mb-1">💀 Goggins</p>
               )}
+              {m.toolEvents && m.toolEvents.length > 0 && (
+                <ToolEventList events={m.toolEvents} />
+              )}
               {m.content}
             </div>
           </div>
@@ -182,13 +231,14 @@ export default function Chat() {
           <div className="flex justify-start">
             <div className="max-w-[85%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm whitespace-pre-wrap bg-gray-800 text-gray-100 border border-red-900/40">
               <p className="text-[10px] font-black text-red-400 uppercase tracking-wider mb-1">💀 Goggins</p>
-              {streamText || (
+              {streamTools.length > 0 && <ToolEventList events={streamTools} />}
+              {streamText || (streamTools.length === 0 && (
                 <span className="inline-flex gap-1">
                   <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                   <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                   <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                 </span>
-              )}
+              ))}
             </div>
           </div>
         )}
@@ -222,6 +272,35 @@ export default function Chat() {
           {streaming ? '⏳' : 'Enviar'}
         </button>
       </form>
+    </div>
+  )
+}
+
+function ToolEventList({ events }: { events: ToolEvent[] }) {
+  return (
+    <div className="mb-2 space-y-1">
+      {events.map((t, i) => {
+        const label = TOOL_LABELS[t.name] || t.name
+        const icon = t.state === 'running' ? '⚙️' : t.state === 'error' ? '⚠️' : '✓'
+        const color =
+          t.state === 'running'
+            ? 'text-gray-400 border-gray-700 bg-gray-900/60'
+            : t.state === 'error'
+              ? 'text-red-300 border-red-900/60 bg-red-950/40'
+              : 'text-green-300 border-green-900/60 bg-green-950/30'
+        return (
+          <div
+            key={i}
+            className={`inline-flex items-center gap-2 text-[11px] px-2 py-1 rounded-md border ${color} mr-1`}
+          >
+            <span className={t.state === 'running' ? 'animate-pulse' : ''}>{icon}</span>
+            <span className="font-semibold">{label}</span>
+            {t.state !== 'running' && t.summary && (
+              <span className="text-gray-400 font-normal truncate max-w-[240px]">— {t.summary}</span>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

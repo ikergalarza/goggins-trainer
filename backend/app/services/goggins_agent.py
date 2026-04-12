@@ -21,7 +21,7 @@ from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
-from app.services import ai_client
+from app.services import ai_client, agent_tools
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,22 @@ NO HAGAS:
 - No inventes datos. Si no están en el contexto, dilo.
 - No salgas del personaje Goggins.
 - No uses emojis (excepto 💀 ⚡ ocasionalmente para impacto).
+
+HERRAMIENTAS DISPONIBLES (tool use):
+Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Úsalas cuando el atleta te pida cambiar algo:
+- `move_workout(workout_id, new_date)` — para reprogramar un entreno a otra fecha.
+- `update_workout(workout_id, ...)` — para cambiar tipo, distancia, duración, zona o instrucciones.
+- `delete_workout(workout_id)` — para eliminar un entreno.
+- `add_workout(date, type, ...)` — para añadir un entreno nuevo.
+- `mark_workout_status(workout_id, status)` — para marcar como completado o saltado.
+- `list_workouts(start_date, end_date)` — si necesitas buscar workouts fuera del contexto inicial.
+
+REGLAS DE TOOL USE:
+- Los workout_ids están en el contexto que te paso (campo `id` de cada workout en `upcoming_workouts`). Úsalos.
+- Si el atleta pide algo ambiguo ("muéveme el de mañana"), elige el más probable basándote en el contexto y CONFIRMA en tu respuesta qué hiciste.
+- Después de ejecutar una tool, responde como Goggins: confirma el cambio en 1-2 frases con tono duro-motivador. NO listes datos crudos del JSON, escribe como humano.
+- Si la tool falla, díselo al atleta sin rodeos: "Eso no funcionó. Intenta de nuevo o dime qué entreno exacto."
+- NUNCA inventes workout_ids. Si no los tienes, llama a `list_workouts` primero.
 """
 
 
@@ -210,18 +226,33 @@ def _load_history(user_id: int, db: Session, limit: int = 20) -> list[dict[str, 
     return [{"role": r.role, "content": r.content} for r in rows]
 
 
+MAX_TOOL_ITERATIONS = 6
+
+
+def _content_block_to_dict(block: Any) -> dict[str, Any]:
+    """Convierte un ContentBlock del SDK de Anthropic a dict para append a messages."""
+    if hasattr(block, "model_dump"):
+        return block.model_dump()
+    if isinstance(block, dict):
+        return block
+    # Fallback genérico
+    return {"type": getattr(block, "type", "text"), "text": getattr(block, "text", str(block))}
+
+
 def chat_stream(
     user: User,
     db: Session,
     user_message: str,
 ) -> Iterator[dict[str, Any]]:
-    """Stream de eventos de chat: phase, chunk, done, error.
+    """Chat agéntico con tool use. Stream de eventos:
 
-    1. Inyecta contexto del atleta como mensaje system extendido.
-    2. Carga historial reciente.
-    3. Persiste el mensaje del usuario.
-    4. Llama a Claude con stream.
-    5. Persiste la respuesta completa al final.
+    - {phase: context|thinking}
+    - {phase: chunk, text: "..."}              — texto del asistente
+    - {phase: tool_use, name, input}           — Claude está llamando una tool
+    - {phase: tool_result, name, ok, summary}  — resultado de ejecutar la tool
+    - {phase: mutation, ...}                   — mutación efectiva del plan
+    - {phase: done, content, mutations}
+    - {phase: error, detail}
     """
     yield {"phase": "context", "message": "Cargando tu estado actual"}
     context = _build_athlete_context(user, db)
@@ -231,44 +262,101 @@ def chat_stream(
         + "\n\n=== CONTEXTO ACTUAL DEL ATLETA ===\n"
         + json.dumps(context, ensure_ascii=False, indent=2, default=str)
         + "\n=== FIN CONTEXTO ===\n"
-        + "\nUsa esos datos cuando contestes. Sé específico con números y fechas reales."
+        + "\nUsa esos datos y sus IDs cuando contestes. Sé específico con números y fechas reales."
     )
 
     history = _load_history(user.id, db, limit=20)
-    messages = list(history) + [{"role": "user", "content": user_message}]
+    messages: list[dict[str, Any]] = list(history) + [
+        {"role": "user", "content": user_message}
+    ]
 
     # Persistir el mensaje del usuario antes de llamar a Claude
-    user_row = ChatMessage(user_id=user.id, role="user", content=user_message)
-    db.add(user_row)
+    db.add(ChatMessage(user_id=user.id, role="user", content=user_message))
     db.commit()
 
     yield {"phase": "thinking", "message": "Goggins está pensando..."}
 
     client = ai_client.get_client()
-    parts: list[str] = []
+    final_text_parts: list[str] = []
+    mutations: list[dict[str, Any]] = []
+
     try:
-        with client.messages.stream(
-            model=ai_client.DEFAULT_MODEL,
-            max_tokens=1500,
-            temperature=0.85,
-            system=full_system,
-            messages=messages,
-        ) as stream:
-            for chunk in stream.text_stream:
-                if not chunk:
+        for iteration in range(MAX_TOOL_ITERATIONS):
+            iteration_text: list[str] = []
+
+            with client.messages.stream(
+                model=ai_client.DEFAULT_MODEL,
+                max_tokens=2000,
+                temperature=0.85,
+                system=full_system,
+                tools=agent_tools.TOOLS,
+                messages=messages,
+            ) as stream:
+                for chunk in stream.text_stream:
+                    if not chunk:
+                        continue
+                    iteration_text.append(chunk)
+                    yield {"phase": "chunk", "text": chunk}
+                final_msg = stream.get_final_message()
+
+            # Acumular el texto de esta vuelta para guardarlo en BD al final
+            if iteration_text:
+                final_text_parts.append("".join(iteration_text))
+
+            # Append la respuesta del asistente (texto + tool_use blocks) al historial
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": [_content_block_to_dict(b) for b in final_msg.content],
+                }
+            )
+
+            if final_msg.stop_reason != "tool_use":
+                break
+
+            # Ejecutar todos los tool_use blocks de esta respuesta
+            tool_results: list[dict[str, Any]] = []
+            for block in final_msg.content:
+                if getattr(block, "type", None) != "tool_use":
                     continue
-                parts.append(chunk)
-                yield {"phase": "chunk", "text": chunk}
+                tool_name = block.name
+                tool_input = block.input or {}
+                yield {"phase": "tool_use", "name": tool_name, "input": tool_input}
+
+                result = agent_tools.execute_tool(tool_name, tool_input, user, db)
+
+                yield {
+                    "phase": "tool_result",
+                    "name": tool_name,
+                    "ok": bool(result.get("ok")),
+                    "summary": result.get("summary") or result.get("error"),
+                }
+                if result.get("ok") and result.get("mutation"):
+                    mutations.append(result)
+                    yield {"phase": "mutation", "data": result}
+
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                        "is_error": not bool(result.get("ok")),
+                    }
+                )
+
+            # Devolver resultados a Claude para que continúe
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            logger.warning("[goggins_agent] alcanzado MAX_TOOL_ITERATIONS")
     except Exception as e:
         logger.exception(f"[goggins_agent] stream falló: {e}")
         yield {"phase": "error", "detail": f"Error llamando a Claude: {e}"}
         return
 
-    full_text = "".join(parts).strip()
+    full_text = "\n\n".join(p for p in final_text_parts if p).strip()
 
     # Persistir respuesta del asistente
-    assistant_row = ChatMessage(user_id=user.id, role="assistant", content=full_text)
-    db.add(assistant_row)
+    db.add(ChatMessage(user_id=user.id, role="assistant", content=full_text))
     db.commit()
 
-    yield {"phase": "done", "content": full_text}
+    yield {"phase": "done", "content": full_text, "mutations": mutations}

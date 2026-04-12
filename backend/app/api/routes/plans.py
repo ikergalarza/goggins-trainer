@@ -1,6 +1,7 @@
 """Rutas para planes de entrenamiento."""
 import json
 import logging
+from datetime import date
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -112,7 +113,9 @@ class WorkoutUpdate(BaseModel):
     type: Optional[str] = None
     planned_distance_km: Optional[float] = None
     planned_duration_min: Optional[int] = None
+    planned_heart_rate_zone: Optional[str] = None
     instructions: Optional[str] = None
+    date: Optional[date] = None
 
 
 @router.patch("/workout/{workout_id}")
@@ -132,6 +135,11 @@ def update_workout(workout_id: int, body: WorkoutUpdate, db: Session = Depends(g
             workout.type = WorkoutType(data.pop("type"))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Tipo inválido: {e}")
+    if "date" in data:
+        new_date = data.pop("date")
+        workout.date = new_date
+        if new_date is not None:
+            workout.day_of_week = new_date.weekday()
     for k, v in data.items():
         setattr(workout, k, v)
 

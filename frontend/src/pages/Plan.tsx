@@ -91,6 +91,8 @@ export default function Plan() {
   const [streamChars, setStreamChars] = useState(0)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [selectedWorkout, setSelectedWorkout] = useState<Workout | null>(null)
+  const [draggingId, setDraggingId] = useState<number | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null)
 
   // Carga inicial
   useEffect(() => {
@@ -115,6 +117,15 @@ export default function Plan() {
 
   useEffect(() => {
     if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
+  }, [selectedGoalId])
+
+  // Escucha mutaciones del plan desde otras páginas (p.ej. chat Goggins)
+  useEffect(() => {
+    const onMutation = () => {
+      if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
+    }
+    window.addEventListener('plan-mutated', onMutation)
+    return () => window.removeEventListener('plan-mutated', onMutation)
   }, [selectedGoalId])
 
   const handleGenerate = async () => {
@@ -221,6 +232,18 @@ export default function Plan() {
     } catch (e) {
       console.error(e)
     }
+  }
+
+  const handleDropOnDay = (targetDateKey: string) => {
+    const id = draggingId
+    setDraggingId(null)
+    setDragOverKey(null)
+    if (id == null) return
+    const w = workouts.find(x => x.id === id)
+    if (!w || w.date === targetDateKey) return
+    // Optimistic
+    setWorkouts(ws => ws.map(x => (x.id === id ? { ...x, date: targetDateKey } : x)))
+    updateWorkout(id, { date: targetDateKey })
   }
 
   // Agrupa workouts por semana (lunes)
@@ -361,11 +384,29 @@ export default function Plan() {
                     const dayKey = formatDayKey(dayDate)
                     const workoutsToday = wk.items.filter(w => w.date === dayKey)
                     const isToday = formatDayKey(new Date()) === dayKey
+                    const isDragOver = dragOverKey === dayKey
                     return (
                       <div
                         key={i}
-                        className={`min-h-[90px] rounded-lg p-2 ${
-                          isToday ? 'border-2 border-red-500/60 bg-gray-950' : 'bg-gray-950/60 border border-gray-800'
+                        onDragOver={e => {
+                          if (draggingId != null) {
+                            e.preventDefault()
+                            if (dragOverKey !== dayKey) setDragOverKey(dayKey)
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverKey === dayKey) setDragOverKey(null)
+                        }}
+                        onDrop={e => {
+                          e.preventDefault()
+                          handleDropOnDay(dayKey)
+                        }}
+                        className={`min-h-[90px] rounded-lg p-2 transition-colors ${
+                          isDragOver
+                            ? 'border-2 border-red-400 bg-red-950/30'
+                            : isToday
+                              ? 'border-2 border-red-500/60 bg-gray-950'
+                              : 'bg-gray-950/60 border border-gray-800'
                         }`}
                       >
                         <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">
@@ -375,10 +416,23 @@ export default function Plan() {
                           {workoutsToday.map(w => (
                             <button
                               key={w.id}
+                              draggable
+                              onDragStart={e => {
+                                setDraggingId(w.id)
+                                e.dataTransfer.effectAllowed = 'move'
+                                // Algunos navegadores requieren setData para iniciar el drag
+                                try { e.dataTransfer.setData('text/plain', String(w.id)) } catch { /* noop */ }
+                              }}
+                              onDragEnd={() => {
+                                setDraggingId(null)
+                                setDragOverKey(null)
+                              }}
                               onClick={() => setSelectedWorkout(w)}
-                              className={`block w-full text-left text-[10px] rounded border px-1.5 py-1 ${
+                              className={`block w-full text-left text-[10px] rounded border px-1.5 py-1 cursor-grab active:cursor-grabbing ${
                                 TYPE_COLORS[w.type] || 'bg-gray-800 border-gray-700 text-gray-300'
-                              } ${w.status === 'completed' ? 'ring-1 ring-green-500/60' : ''}`}
+                              } ${w.status === 'completed' ? 'ring-1 ring-green-500/60' : ''} ${
+                                draggingId === w.id ? 'opacity-40' : ''
+                              }`}
                             >
                               <div className="font-bold truncate">{TYPE_LABELS[w.type] || w.type}</div>
                               {w.planned_distance_km && (
