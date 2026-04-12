@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import StatCard from '../components/StatCard'
-import BarChart from '../components/BarChart'
+import WeeklyChart from '../components/WeeklyChart'
 import api from '../api'
 
 const USER_ID = 1
@@ -170,32 +170,34 @@ export default function Dashboard() {
         {weeklyStats.length === 0 ? (
           <p className="text-sm text-gray-600">Sin datos todavía. Sincroniza Strava.</p>
         ) : (
-          <div className="space-y-6">
-            <div>
-              <p className="text-xs text-gray-500 uppercase mb-2">Kilómetros / semana</p>
-              <BarChart
-                data={weeklyStats.map(w => ({
-                  label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
-                  value: w.km,
-                }))}
-                unit=" km"
-                color="bg-red-500"
-                height={180}
-              />
-            </div>
+          <div className="space-y-8">
+            <WeeklyChart
+              title="Kilómetros / semana"
+              data={weeklyStats.map(w => ({
+                label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
+                date: w.week_start,
+                value: w.km,
+              }))}
+              unit=" km"
+              barColor="#ef4444"
+              lineColor="#38bdf8"
+              movingAverageWindow={4}
+              height={300}
+            />
 
-            <div>
-              <p className="text-xs text-gray-500 uppercase mb-2">Minutos / semana</p>
-              <BarChart
-                data={weeklyStats.map(w => ({
-                  label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
-                  value: w.time_min,
-                }))}
-                unit=" min"
-                color="bg-blue-500"
-                height={120}
-              />
-            </div>
+            <WeeklyChart
+              title="Minutos / semana"
+              data={weeklyStats.map(w => ({
+                label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
+                date: w.week_start,
+                value: w.time_min,
+              }))}
+              unit=" min"
+              barColor="#3b82f6"
+              lineColor="#fbbf24"
+              movingAverageWindow={4}
+              height={240}
+            />
           </div>
         )}
       </div>
