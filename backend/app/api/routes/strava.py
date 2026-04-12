@@ -72,11 +72,14 @@ def strava_callback(
     user_id = int(state)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        user = User(id=user_id, name="Atleta", email=f"user{user_id}@goggins.local")
+        db.add(user)
+        db.flush()
 
     try:
         token_data = strava_service.exchange_code(code)
     except Exception as e:
+        logger.exception(f"[callback] Error al intercambiar código: {e}")
         raise HTTPException(status_code=400, detail=f"Error al obtener tokens: {e}")
 
     athlete = token_data.get("athlete", {})
@@ -87,7 +90,8 @@ def strava_callback(
 
     db.add(user)
     db.commit()
-    return {"message": "Strava conectado correctamente", "athlete": athlete.get("firstname")}
+    logger.info(f"[callback] Strava conectado para user={user_id}, athlete={athlete.get('firstname')}")
+    return RedirectResponse(url="/")
 
 
 @router.post("/sync/{user_id}")

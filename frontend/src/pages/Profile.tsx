@@ -1,40 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import api from '../api'
 
 const USER_ID = 1
 
 export default function Profile() {
-  const [accessToken, setAccessToken] = useState('')
-  const [refreshToken, setRefreshToken] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [status, setStatus] = useState<{ connected: boolean; athlete_id: string | null } | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  const handleSave = async () => {
-    if (!accessToken || !refreshToken) {
-      setMsg({ text: 'Rellena los dos tokens.', ok: false })
-      return
-    }
-    setSaving(true)
-    setMsg(null)
-    try {
-      const r = await api.post(`/api/strava/tokens/${USER_ID}`, {
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        expires_at: 0,
-      })
-      const r_data = r.data
-      const text = r_data.warning
-        ? `${r_data.message} (${r_data.warning})`
-        : r_data.message
-      setMsg({ text, ok: !r_data.warning })
-      setAccessToken('')
-      setRefreshToken('')
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail || err?.message || 'Error desconocido'
-      setMsg({ text: `Error: ${detail}`, ok: false })
-    } finally {
-      setSaving(false)
-    }
+  useEffect(() => {
+    api.get(`/api/strava/status/${USER_ID}`)
+      .then(r => setStatus(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const handleConnect = () => {
+    window.location.href = `/api/strava/auth?user_id=${USER_ID}`
   }
 
   return (
@@ -44,58 +25,37 @@ export default function Profile() {
         <p className="text-gray-500 text-sm mt-1">Configura tu cuenta y conexiones</p>
       </div>
 
-      {/* Conectar Strava con tokens */}
+      {/* Conectar Strava con OAuth */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
         <div>
           <h2 className="font-semibold">Conectar Strava</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Obtén tus tokens en{' '}
-            <a
-              href="https://www.strava.com/settings/api"
-              target="_blank"
-              rel="noreferrer"
-              className="text-orange-400 hover:underline"
-            >
-              strava.com/settings/api
-            </a>
-            {' '}→ sección <strong className="text-gray-300">"Your Access Token"</strong>.
+            Conecta tu cuenta de Strava para sincronizar actividades automáticamente.
           </p>
         </div>
 
-        <div className="space-y-3">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Access Token</label>
-            <input
-              type="password"
-              value={accessToken}
-              onChange={e => setAccessToken(e.target.value)}
-              placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-orange-500"
-            />
+        {loading ? (
+          <p className="text-sm text-gray-600">Cargando...</p>
+        ) : status?.connected ? (
+          <div className="space-y-3">
+            <p className="text-sm text-green-400">
+              Strava conectado (Athlete ID: {status.athlete_id})
+            </p>
+            <button
+              onClick={handleConnect}
+              className="bg-gray-700 hover:bg-gray-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            >
+              Reconectar Strava
+            </button>
           </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Refresh Token</label>
-            <input
-              type="password"
-              value={refreshToken}
-              onChange={e => setRefreshToken(e.target.value)}
-              placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-orange-500"
-            />
-          </div>
-        </div>
-
-        {msg && (
-          <p className={`text-sm ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</p>
+        ) : (
+          <button
+            onClick={handleConnect}
+            className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+          >
+            Conectar con Strava
+          </button>
         )}
-
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-        >
-          {saving ? 'Guardando...' : 'Guardar tokens'}
-        </button>
       </div>
 
       {/* Placeholder datos físicos */}
