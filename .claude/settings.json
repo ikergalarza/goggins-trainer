@@ -10,7 +10,9 @@
       "Bash(python3 -m pip install alembic)",
       "Bash(python -m pip install alembic)",
       "Bash(pip3 install:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
