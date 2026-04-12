@@ -1,7 +1,9 @@
 """Rutas para planes de entrenamiento."""
+import json
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -41,7 +43,7 @@ def _serialize_workout(w: Workout) -> dict:
 
 @router.post("/generate/{user_id}/{goal_id}")
 def generate(user_id: int, goal_id: int, db: Session = Depends(get_db)):
-    """Genera (o regenera) un plan de entrenamiento para un objetivo."""
+    """Genera (o regenera) un plan de entrenamiento para un objetivo (no streaming)."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -56,6 +58,35 @@ def generate(user_id: int, goal_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error generando plan: {e}")
 
     return result
+
+
+@router.post("/generate_stream/{user_id}/{goal_id}")
+def generate_stream(user_id: int, goal_id: int, db: Session = Depends(get_db)):
+    """Stream Server-Sent Events con eventos de progreso de la generación."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    goal = db.query(Goal).filter(Goal.id == goal_id, Goal.user_id == user_id).first()
+    if not goal:
+        raise HTTPException(status_code=404, detail="Objetivo no encontrado")
+
+    def event_generator():
+        try:
+            for event in plan_generator.generate_plan_stream(user, goal, db):
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        except Exception as e:
+            logger.exception(f"[plans] stream error: {e}")
+            yield f"data: {json.dumps({'phase': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/{user_id}")

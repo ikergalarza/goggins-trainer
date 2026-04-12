@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy.orm import Session
 
@@ -181,15 +181,16 @@ def _compute_weeks(goal: Goal) -> int:
     return 8  # plan genérico de 8 semanas si no hay fecha
 
 
-def generate_plan(user: User, goal: Goal, db: Session) -> dict[str, Any]:
-    """Llama a Claude, parsea la respuesta y crea Workouts en BD.
+def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[str, Any]]:
+    """Versión streaming: yields events de progreso (phase, message, chunk, done...).
 
-    Borra los workouts planificados (no completados) anteriores del mismo
-    objetivo antes de crear los nuevos.
+    Usa la API de streaming de Anthropic para emitir chunks de texto en
+    tiempo real, de modo que el frontend pueda mostrar una barra de progreso.
     """
     weeks = _compute_weeks(goal)
-    logger.info(f"[plan_generator] Generando plan goal={goal.id} weeks={weeks}")
+    logger.info(f"[plan_generator] (stream) Generando plan goal={goal.id} weeks={weeks}")
 
+    yield {"phase": "context", "message": f"Analizando tu perfil y volumen reciente ({weeks} semanas)"}
     context = _build_context(user, goal, db)
     context["plan_target_weeks"] = weeks
 
@@ -200,23 +201,52 @@ def generate_plan(user: User, goal: Goal, db: Session) -> dict[str, Any]:
         f"```json\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}\n```"
     )
 
-    raw = ai_client.complete(
-        system=SYSTEM_PROMPT,
-        user_message=user_message,
-        max_tokens=6000,
-        temperature=0.6,
-    )
+    yield {"phase": "calling_ai", "message": "Pidiendo plan a Claude (puede tardar 30-60s)"}
+
+    client = ai_client.get_client()
+    raw_parts: list[str] = []
+    try:
+        with client.messages.stream(
+            model=ai_client.DEFAULT_MODEL,
+            max_tokens=6000,
+            temperature=0.6,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                if not text_chunk:
+                    continue
+                raw_parts.append(text_chunk)
+                yield {
+                    "phase": "streaming",
+                    "chunk": text_chunk,
+                    "chars": sum(len(p) for p in raw_parts),
+                }
+    except Exception as e:
+        logger.exception(f"[plan_generator] stream falló: {e}")
+        yield {"phase": "error", "detail": f"Error llamando a Claude: {e}"}
+        return
+
+    raw = "".join(raw_parts)
+    yield {"phase": "parsing", "message": "Procesando plan generado"}
+
     data, summary = _parse_response(raw)
     if not data or "weekly_plan" not in data:
-        raise ValueError(f"Respuesta de Claude sin weekly_plan: {raw[:300]}")
+        yield {"phase": "error", "detail": f"Respuesta sin weekly_plan: {raw[:200]}"}
+        return
+
+    yield {"phase": "saving", "message": "Guardando entrenos en la base de datos"}
 
     # Borrar workouts planificados anteriores del mismo objetivo
-    db.query(Workout).filter(
-        Workout.goal_id == goal.id,
-        Workout.status == WorkoutStatus.planned,
-    ).delete(synchronize_session=False)
+    try:
+        db.query(Workout).filter(
+            Workout.goal_id == goal.id,
+            Workout.status == WorkoutStatus.planned,
+        ).delete(synchronize_session=False)
+    except Exception as e:
+        logger.warning(f"[plan_generator] no se pudo borrar workouts previos: {e}")
+        db.rollback()
 
-    # Crear los nuevos workouts
     today = date.today()
     monday_this_week = today - timedelta(days=today.weekday())
     created = 0
@@ -248,10 +278,17 @@ def generate_plan(user: User, goal: Goal, db: Session) -> dict[str, Any]:
             db.add(wk)
             created += 1
 
-    db.commit()
-    logger.info(f"[plan_generator] Plan generado: {created} workouts")
+    try:
+        db.commit()
+    except Exception as e:
+        logger.exception(f"[plan_generator] commit falló: {e}")
+        db.rollback()
+        yield {"phase": "error", "detail": f"Error guardando workouts: {e}"}
+        return
 
-    return {
+    logger.info(f"[plan_generator] Plan generado: {created} workouts")
+    yield {
+        "phase": "done",
         "plan_name": data.get("plan_name"),
         "weeks": data.get("weeks", weeks),
         "phases": data.get("phases", []),
@@ -259,6 +296,19 @@ def generate_plan(user: User, goal: Goal, db: Session) -> dict[str, Any]:
         "workouts_created": created,
         "model": ai_client.DEFAULT_MODEL,
     }
+
+
+def generate_plan(user: User, goal: Goal, db: Session) -> dict[str, Any]:
+    """Wrapper no-streaming: drena el generador y devuelve el evento `done`."""
+    final: dict[str, Any] | None = None
+    for event in generate_plan_stream(user, goal, db):
+        if event.get("phase") == "done":
+            final = event
+        elif event.get("phase") == "error":
+            raise ValueError(event.get("detail") or "Error generando plan")
+    if not final:
+        raise ValueError("El generador no produjo evento final")
+    return final
 
 
 def match_strava_to_workouts(user: User, db: Session) -> int:

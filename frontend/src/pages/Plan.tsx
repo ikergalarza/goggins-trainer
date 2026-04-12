@@ -86,6 +86,9 @@ export default function Plan() {
   const [workouts, setWorkouts] = useState<Workout[]>([])
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [progressMsg, setProgressMsg] = useState('')
+  const [streamChars, setStreamChars] = useState(0)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [selectedWorkout, setSelectedWorkout] = useState<Workout | null>(null)
 
@@ -117,15 +120,85 @@ export default function Plan() {
   const handleGenerate = async () => {
     if (!selectedGoalId) return
     setGenerating(true)
+    setProgress(0)
+    setProgressMsg('Iniciando...')
+    setStreamChars(0)
     setMsg(null)
+
+    const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) || ''
+    const url = `${baseUrl}/api/plans/generate_stream/${USER_ID}/${selectedGoalId}`
+
     try {
-      const r = await api.post(`/api/plans/generate/${USER_ID}/${selectedGoalId}`)
-      setMsg({ text: `Plan creado: ${r.data.workouts_created} entrenos`, ok: true })
-      fetchWorkouts(selectedGoalId)
+      const res = await fetch(url, { method: 'POST' })
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`)
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let receivedChars = 0
+      // Estimación inicial del tamaño total — se va recalibrando
+      const expectedChars = 5000
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+
+        for (const ev of events) {
+          const line = ev.split('\n').find(l => l.startsWith('data: '))
+          if (!line) continue
+          let payload: any
+          try {
+            payload = JSON.parse(line.slice(6))
+          } catch {
+            continue
+          }
+
+          if (payload.phase === 'context') {
+            setProgress(5)
+            setProgressMsg(payload.message || 'Analizando perfil...')
+          } else if (payload.phase === 'calling_ai') {
+            setProgress(10)
+            setProgressMsg(payload.message || 'Pidiendo plan a Claude...')
+          } else if (payload.phase === 'streaming') {
+            receivedChars = payload.chars || receivedChars
+            setStreamChars(receivedChars)
+            // Crece asintóticamente entre 10% y 88%
+            const ratio = Math.min(1, receivedChars / expectedChars)
+            const pct = 10 + ratio * 78
+            setProgress(pct)
+            setProgressMsg(`Recibiendo plan de Claude (${receivedChars} caracteres)`)
+          } else if (payload.phase === 'parsing') {
+            setProgress(90)
+            setProgressMsg(payload.message || 'Procesando plan...')
+          } else if (payload.phase === 'saving') {
+            setProgress(95)
+            setProgressMsg(payload.message || 'Guardando entrenos...')
+          } else if (payload.phase === 'done') {
+            setProgress(100)
+            setProgressMsg(`✓ Plan creado: ${payload.workouts_created} entrenos`)
+            setMsg({ text: `Plan creado: ${payload.workouts_created} entrenos`, ok: true })
+            fetchWorkouts(selectedGoalId)
+          } else if (payload.phase === 'error') {
+            throw new Error(payload.detail || 'Error desconocido')
+          }
+        }
+      }
     } catch (e: any) {
-      setMsg({ text: `Error: ${e?.response?.data?.detail || e?.message}`, ok: false })
+      setMsg({ text: `Error: ${e?.message || e}`, ok: false })
     } finally {
-      setGenerating(false)
+      // Pequeño delay para que el usuario vea el 100%
+      setTimeout(() => {
+        setGenerating(false)
+        setProgress(0)
+        setProgressMsg('')
+        setStreamChars(0)
+      }, 800)
     }
   }
 
@@ -194,8 +267,29 @@ export default function Plan() {
         </div>
       </div>
 
-      {msg && (
+      {msg && !generating && (
         <p className={`text-sm ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</p>
+      )}
+
+      {/* Barra de progreso de generación */}
+      {generating && (
+        <div className="bg-gray-900 border border-red-900/40 rounded-xl p-5 space-y-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-bold text-gray-200">{progressMsg || 'Generando plan...'}</span>
+            <span className="font-mono text-xs text-gray-500">{progress.toFixed(0)}%</span>
+          </div>
+          <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-red-600 to-red-400 transition-all duration-300 ease-out"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          {streamChars > 0 && (
+            <p className="text-[11px] text-gray-600 font-mono">
+              ⏳ Streaming desde Claude · {streamChars} caracteres recibidos
+            </p>
+          )}
+        </div>
       )}
 
       {/* Selector de objetivo */}

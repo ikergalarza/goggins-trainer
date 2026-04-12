@@ -29,9 +29,33 @@ COLUMNS_TO_ADD = [
     ("workouts", "day_of_week", "INTEGER"),
 ]
 
+# (enum_type_name, [values]) — ALTER TYPE ADD VALUE IF NOT EXISTS
+ENUM_VALUES_TO_ADD = [
+    (
+        "workouttype",
+        [
+            "easy_run",
+            "tempo",
+            "intervals",
+            "long_run",
+            "recovery",
+            "fartlek",
+            "hill_repeats",
+            "hyrox_sim",
+            "hyrox_stations",
+            "strength_upper",
+            "strength_lower",
+            "strength_full",
+            "cross_training",
+            "rest",
+        ],
+    ),
+]
+
 
 def ensure_schema(engine) -> None:
-    """Añade columnas nuevas a tablas existentes (idempotente)."""
+    """Añade columnas nuevas y valores a enums existentes (idempotente)."""
+    # 1. Columnas nuevas
     with engine.begin() as conn:
         for table, column, col_type in COLUMNS_TO_ADD:
             try:
@@ -41,3 +65,20 @@ def ensure_schema(engine) -> None:
                 logger.info(f"[migrations] OK {table}.{column}")
             except Exception as e:
                 logger.warning(f"[migrations] {table}.{column} falló: {e}")
+
+    # 2. Valores de enum nuevos. ALTER TYPE ADD VALUE no puede ejecutarse en
+    #    una transacción en algunas versiones de Postgres → usamos AUTOCOMMIT.
+    try:
+        with engine.connect() as conn:
+            ac = conn.execution_options(isolation_level="AUTOCOMMIT")
+            for enum_name, values in ENUM_VALUES_TO_ADD:
+                for v in values:
+                    try:
+                        ac.execute(text(
+                            f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{v}'"
+                        ))
+                        logger.info(f"[migrations] OK enum {enum_name} += {v}")
+                    except Exception as e:
+                        logger.warning(f"[migrations] enum {enum_name} += {v} falló: {e}")
+    except Exception as e:
+        logger.warning(f"[migrations] enum block falló: {e}")
