@@ -19,7 +19,7 @@ const CATEGORIES = [
   { value: '21k', label: 'Media maratón (21k)', unit: 'seconds' },
   { value: '42k', label: 'Maratón (42k)', unit: 'seconds' },
   { value: '1mile', label: '1 milla', unit: 'seconds' },
-  { value: 'vam_test', label: 'Test VAM (m/s)', unit: 'm/s' },
+  { value: 'vam_test', label: 'Test VAM (5 min)', unit: 'seconds' },
   { value: 'hyrox_full', label: 'Hyrox completo', unit: 'seconds' },
   { value: 'hyrox_run_only', label: 'Hyrox — solo running (8×1k)', unit: 'seconds' },
   { value: 'hyrox_roxzone', label: 'Hyrox — Roxzone', unit: 'seconds' },

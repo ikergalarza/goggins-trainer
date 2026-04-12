@@ -20,14 +20,40 @@ interface ProfileData {
   target_paces: any
 }
 
+// VAM utilities — input en min/km (mm:ss), almacenado en m/s
+function msToPace(ms: number | null): string {
+  if (!ms || ms <= 0) return ''
+  const secondsPerKm = 1000 / ms
+  const minutes = Math.floor(secondsPerKm / 60)
+  const seconds = Math.round(secondsPerKm - minutes * 60)
+  if (seconds === 60) return `${minutes + 1}:00`
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function paceToMs(pace: string): number | null {
+  if (!pace) return null
+  const match = pace.match(/^(\d+):(\d{1,2})$/)
+  if (!match) return null
+  const minutes = parseInt(match[1], 10)
+  const seconds = parseInt(match[2], 10)
+  if (isNaN(minutes) || isNaN(seconds) || seconds >= 60) return null
+  const totalSeconds = minutes * 60 + seconds
+  if (totalSeconds <= 0) return null
+  return 1000 / totalSeconds
+}
+
 export default function Profile() {
   const [profile, setProfile] = useState<ProfileData | null>(null)
+  const [vamPace, setVamPace] = useState('')
   const [stravaConnected, setStravaConnected] = useState(false)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
 
   useEffect(() => {
-    api.get(`/api/profile/${USER_ID}`).then(r => setProfile(r.data)).catch(() => {})
+    api.get(`/api/profile/${USER_ID}`).then(r => {
+      setProfile(r.data)
+      setVamPace(msToPace(r.data.vam_ms))
+    }).catch(() => {})
     api.get(`/api/strava/status/${USER_ID}`).then(r => setStravaConnected(r.data.connected)).catch(() => {})
   }, [])
 
@@ -42,13 +68,24 @@ export default function Profile() {
 
   const handleSave = async () => {
     if (!profile) return
+    // Validar VAM pace si el usuario ha introducido algo
+    let vamMs: number | null = null
+    if (vamPace.trim()) {
+      vamMs = paceToMs(vamPace.trim())
+      if (vamMs === null) {
+        setMsg({ text: 'VAM: formato inválido. Usa mm:ss (ej. 3:45)', ok: false })
+        return
+      }
+    }
     setSaving(true)
     setMsg(null)
     try {
-      const { id, name, hr_zones, target_paces, ...payload } = profile
+      const { id, name, hr_zones, target_paces, ...rest } = profile
+      const payload = { ...rest, vam_ms: vamMs }
       await api.put(`/api/profile/${USER_ID}`, payload)
       const r = await api.get(`/api/profile/${USER_ID}`)
       setProfile(r.data)
+      setVamPace(msToPace(r.data.vam_ms))
       setMsg({ text: 'Perfil guardado', ok: true })
     } catch (err: any) {
       setMsg({ text: `Error: ${err?.response?.data?.detail || err.message}`, ok: false })
@@ -136,8 +173,8 @@ export default function Profile() {
           <Field label="Días de entreno / semana">
             <input type="number" min={1} max={7} value={profile.training_days_per_week ?? ''} onChange={e => update('training_days_per_week', e.target.value ? +e.target.value : null)} className={input} />
           </Field>
-          <Field label="VAM (m/s) — opcional">
-            <input type="number" step="0.1" value={profile.vam_ms ?? ''} onChange={e => update('vam_ms', e.target.value ? +e.target.value : null)} className={input} placeholder="ej. 4.5" />
+          <Field label="VAM — ritmo test 5 min (mm:ss /km)">
+            <input type="text" value={vamPace} onChange={e => setVamPace(e.target.value)} className={input} placeholder="ej. 3:45" />
           </Field>
         </div>
       </div>
