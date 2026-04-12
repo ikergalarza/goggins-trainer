@@ -48,11 +48,12 @@ export default function Dashboard() {
     })
     .reduce((sum, a) => sum + (a.distance_km ?? 0), 0)
 
-  const handleSync = async () => {
+  const handleSync = async (syncAll = false) => {
     setSyncing(true)
     setSyncMsg(null)
     try {
-      const syncRes = await api.post(`/api/strava/sync/${USER_ID}`)
+      const url = `/api/strava/sync/${USER_ID}${syncAll ? '?all=true' : ''}`
+      const syncRes = await api.post(url)
       const r = await api.get(`/api/strava/activities/${USER_ID}?limit=5`)
       setActivities(r.data)
       setSyncMsg({ text: `Sincronización OK: ${syncRes.data.new_activities} nuevas actividades`, ok: true })
@@ -76,13 +77,22 @@ export default function Dashboard() {
           <p className="text-gray-500 text-sm mt-1">No excuses. No days off.</p>
         </div>
         {stravaConnected ? (
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-900/40"
-          >
-            {syncing ? '⏳ Sincronizando...' : '🔄 Sincronizar Strava'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleSync(false)}
+              disabled={syncing}
+              className="flex items-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-900/40"
+            >
+              {syncing ? '⏳ Sincronizando...' : '🔄 Sincronizar'}
+            </button>
+            <button
+              onClick={() => handleSync(true)}
+              disabled={syncing}
+              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+            >
+              📥 Todo el historial
+            </button>
+          </div>
         ) : (
           <Link
             to="/profile"

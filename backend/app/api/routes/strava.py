@@ -97,10 +97,10 @@ def strava_callback(
 @router.post("/sync/{user_id}")
 def sync_strava(
     user_id: int,
-    pages: int = Query(default=1, ge=1, le=5),  # máx 5 páginas para respetar rate limits
+    all: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    """Sincroniza las últimas actividades (máx 50 por página, 5 páginas)."""
+    """Sincroniza actividades. Con all=true descarga todo el historial."""
     logger.info(f"[sync] Petición de sync para user_id={user_id}, pages={pages}")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -112,8 +112,9 @@ def sync_strava(
 
     logger.info(f"[sync] Usuario encontrado: {user.name}, athlete_id={user.strava_athlete_id}")
 
+    max_pages = 50 if all else 2  # 50 pages = 2500 actividades máx
     try:
-        new_count = strava_service.sync_activities(user, db, pages=pages)
+        new_count = strava_service.sync_activities(user, db, pages=max_pages)
     except Exception as e:
         logger.exception(f"[sync] Error durante sync: {e}")
         raise HTTPException(status_code=500, detail=f"Error de Strava: {e}")
