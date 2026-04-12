@@ -126,7 +126,7 @@ def sync_strava(
 @router.get("/activities/{user_id}")
 def get_activities(
     user_id: int,
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=20, ge=1, le=5000),
     db: Session = Depends(get_db),
 ):
     from app.models.strava_activity import StravaActivity

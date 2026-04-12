@@ -20,7 +20,7 @@ export default function Activities() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get(`/api/strava/activities/${USER_ID}?limit=50`)
+    api.get(`/api/strava/activities/${USER_ID}?limit=1000`)
       .then(r => setActivities(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
