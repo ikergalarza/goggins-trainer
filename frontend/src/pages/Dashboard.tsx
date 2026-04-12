@@ -30,6 +30,9 @@ export default function Dashboard() {
   const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState<any>(null)
+  const [insight, setInsight] = useState<any>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
 
   useEffect(() => {
     api.get(`/api/strava/status/${USER_ID}`)
@@ -40,7 +43,21 @@ export default function Dashboard() {
       .catch(() => {})
       .finally(() => setLoading(false))
     api.get(`/api/profile/${USER_ID}`).then(r => setProfile(r.data)).catch(() => {})
+    api.get(`/api/ai/insights/${USER_ID}?kind=fitness_state`).then(r => setInsight(r.data)).catch(() => {})
   }, [])
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true)
+    setAiError(null)
+    try {
+      const r = await api.post(`/api/ai/analyze/${USER_ID}`)
+      setInsight(r.data)
+    } catch (e: any) {
+      setAiError(e?.response?.data?.detail || e?.message || 'Error desconocido')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
 
   const weeklyKm = activities
     .filter(a => {
@@ -115,6 +132,104 @@ export default function Dashboard() {
         <StatCard label="Actividades" value={activities.length} unit="recientes" color="blue" />
         <StatCard label="Strava" value={stravaConnected ? '✅ Conectado' : '❌ Off'} color={stravaConnected ? 'green' : 'red'} />
         <StatCard label="Objetivos" value="—" sub="Configura en Objetivos" color="purple" />
+      </div>
+
+      {/* Análisis IA */}
+      <div className="bg-gradient-to-br from-gray-900 to-gray-900/60 border border-red-900/30 rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="font-black text-lg">🧠 Análisis IA del estado físico</h2>
+            {insight?.created_at && (
+              <p className="text-xs text-gray-500 mt-1">
+                Último análisis: {new Date(insight.created_at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={handleAnalyze}
+            disabled={analyzing}
+            className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold"
+          >
+            {analyzing ? '⏳ Analizando...' : insight ? '🔄 Re-analizar' : '⚡ Analizar ahora'}
+          </button>
+        </div>
+
+        {aiError && <p className="text-sm text-red-400 mb-3">Error: {aiError}</p>}
+
+        {!insight && !analyzing && (
+          <p className="text-sm text-gray-500">
+            Genera un diagnóstico completo de tu estado físico basado en tu histórico, marcas y objetivos.
+          </p>
+        )}
+
+        {insight?.data && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div className="bg-black/30 rounded-lg p-3">
+                <p className="text-xs text-gray-500 uppercase">Nivel</p>
+                <p className="font-bold text-red-400 mt-0.5 capitalize">{insight.data.fitness_level || '—'}</p>
+              </div>
+              <div className="bg-black/30 rounded-lg p-3">
+                <p className="text-xs text-gray-500 uppercase">Forma</p>
+                <p className="font-bold text-red-400 mt-0.5 capitalize">{insight.data.current_form || '—'}</p>
+              </div>
+              <div className="bg-black/30 rounded-lg p-3">
+                <p className="text-xs text-gray-500 uppercase">Volumen</p>
+                <p className="font-bold text-red-400 mt-0.5">{insight.data.weekly_km_current ?? '—'} km/sem</p>
+              </div>
+              <div className="bg-black/30 rounded-lg p-3">
+                <p className="text-xs text-gray-500 uppercase">Tendencia</p>
+                <p className="font-bold text-red-400 mt-0.5 capitalize">{insight.data.trend || '—'}</p>
+              </div>
+            </div>
+
+            {insight.data.target_paces && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-2">Ritmos objetivo</p>
+                <div className="flex flex-wrap gap-3 text-sm">
+                  {Object.entries(insight.data.target_paces).map(([k, v]: [string, any]) => (
+                    <div key={k} className="bg-black/30 px-3 py-1.5 rounded-lg">
+                      <span className="text-gray-500 capitalize">{k}: </span>
+                      <span className="font-bold text-gray-200">{v} /km</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {insight.data.strengths?.length > 0 && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">Fortalezas</p>
+                <ul className="text-sm text-gray-300 list-disc list-inside space-y-0.5">
+                  {insight.data.strengths.map((s: string, i: number) => <li key={i}>{s}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {insight.data.weaknesses?.length > 0 && (
+              <div>
+                <p className="text-xs text-gray-500 uppercase mb-1">A mejorar</p>
+                <ul className="text-sm text-gray-300 list-disc list-inside space-y-0.5">
+                  {insight.data.weaknesses.map((s: string, i: number) => <li key={i}>{s}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {insight.data.next_focus && (
+              <div className="bg-red-900/20 border border-red-900/40 rounded-lg p-3">
+                <p className="text-xs text-red-400 uppercase font-bold mb-1">Próximo foco</p>
+                <p className="text-sm text-gray-200">{insight.data.next_focus}</p>
+              </div>
+            )}
+
+            {insight.summary && (
+              <details className="bg-black/30 rounded-lg p-3">
+                <summary className="text-xs text-gray-500 uppercase cursor-pointer">Ver análisis completo</summary>
+                <p className="text-sm text-gray-300 mt-2 whitespace-pre-wrap">{insight.summary}</p>
+              </details>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Zonas cardíacas */}

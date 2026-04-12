@@ -4,5 +4,14 @@ from app.models.workout import Workout
 from app.models.strava_activity import StravaActivity
 from app.models.personal_record import PersonalRecord
 from app.models.chat_message import ChatMessage
+from app.models.ai_insight import AiInsight
 
-__all__ = ["User", "Goal", "Workout", "StravaActivity", "PersonalRecord", "ChatMessage"]
+__all__ = [
+    "User",
+    "Goal",
+    "Workout",
+    "StravaActivity",
+    "PersonalRecord",
+    "ChatMessage",
+    "AiInsight",
+]
