@@ -52,7 +52,7 @@ export default function Activities() {
               </div>
               <div className="flex gap-6 text-right text-sm">
                 <div>
-                  <p className="font-semibold text-orange-400">{a.distance_km?.toFixed(2)} km</p>
+                  <p className="font-semibold text-red-400">{a.distance_km?.toFixed(2)} km</p>
                   <p className="text-xs text-gray-500">distancia</p>
                 </div>
                 <div>

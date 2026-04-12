@@ -17,10 +17,13 @@ class TokenInput(BaseModel):
 
 @router.post("/tokens/{user_id}")
 def set_tokens(user_id: int, body: TokenInput, db: Session = Depends(get_db)):
-    """Guarda los tokens de Strava directamente (sin flujo OAuth)."""
+    """Guarda los tokens de Strava directamente (sin flujo OAuth).
+    Si el usuario no existe, lo crea automáticamente."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        user = User(id=user_id, name="Atleta", email=f"user{user_id}@goggins.local")
+        db.add(user)
+        db.flush()  # para que tenga id antes del commit
 
     # Obtener athlete_id desde Strava para guardar el vínculo
     try:
