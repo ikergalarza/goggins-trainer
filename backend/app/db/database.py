@@ -4,7 +4,9 @@ from app.core.config import settings
 
 # Railway inyecta DATABASE_URL como postgres://, SQLAlchemy necesita postgresql://
 _db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
-engine = create_engine(_db_url)
+
+# Railway PostgreSQL requiere SSL
+engine = create_engine(_db_url, connect_args={"sslmode": "require"})
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
