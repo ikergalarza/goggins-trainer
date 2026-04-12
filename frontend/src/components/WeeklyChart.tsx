@@ -103,9 +103,10 @@ export default function WeeklyChart({
               fontSize: 12,
             }}
             labelStyle={{ color: '#94a3b8', fontWeight: 'bold', marginBottom: 4 }}
-            formatter={(value: any, name: string) => {
-              if (value == null) return ['—', name]
-              return [`${value}${unit}`, name === 'value' ? 'Valor' : name === 'ma' ? `MA(${movingAverageWindow})` : name]
+            formatter={(value: any, name: any) => {
+              const label = name === 'value' ? 'Valor' : name === 'ma' ? `MA(${movingAverageWindow})` : String(name ?? '')
+              if (value == null) return ['—', label]
+              return [`${value}${unit}`, label]
             }}
           />
           <Legend
