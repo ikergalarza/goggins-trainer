@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(scoop install:*)",
+      "Bash(npm create:*)"
+    ]
+  }
+}
