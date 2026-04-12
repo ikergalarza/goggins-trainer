@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.api.routes import strava, profile, records, goals, ai
+from app.api.routes import strava, profile, records, goals, ai, plans
 from app.db.database import engine, Base
 from app.db.migrations import ensure_schema
 import app.models  # noqa
@@ -35,6 +35,7 @@ app.include_router(profile.router)
 app.include_router(records.router)
 app.include_router(goals.router)
 app.include_router(ai.router)
+app.include_router(plans.router)
 
 
 @app.get("/health")

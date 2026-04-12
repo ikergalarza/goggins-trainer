@@ -35,6 +35,10 @@ class Workout(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    goal_id = Column(Integer, ForeignKey("goals.id"), nullable=True, index=True)
+
+    week_index = Column(Integer, nullable=True)   # 1..N dentro del plan
+    day_of_week = Column(Integer, nullable=True)  # 0=lunes ... 6=domingo
 
     date = Column(Date, nullable=False)
     type = Column(Enum(WorkoutType), nullable=False)

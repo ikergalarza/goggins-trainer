@@ -22,6 +22,11 @@ COLUMNS_TO_ADD = [
     ("goals", "target_time_seconds", "INTEGER"),
     ("goals", "hyrox_division", "VARCHAR"),
     ("goals", "notes", "TEXT"),
+
+    # Workout — vinculación con plan/objetivo
+    ("workouts", "goal_id", "INTEGER"),
+    ("workouts", "week_index", "INTEGER"),
+    ("workouts", "day_of_week", "INTEGER"),
 ]
 
 
