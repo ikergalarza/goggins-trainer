@@ -101,7 +101,8 @@ def sync_strava(
     db: Session = Depends(get_db),
 ):
     """Sincroniza actividades. Con all=true descarga todo el historial."""
-    logger.info(f"[sync] Petición de sync para user_id={user_id}, pages={pages}")
+    max_pages = 50 if all else 2
+    logger.info(f"[sync] Petición de sync para user_id={user_id}, all={all}, max_pages={max_pages}")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         logger.error(f"[sync] Usuario {user_id} no encontrado")
@@ -112,7 +113,6 @@ def sync_strava(
 
     logger.info(f"[sync] Usuario encontrado: {user.name}, athlete_id={user.strava_athlete_id}")
 
-    max_pages = 50 if all else 2  # 50 pages = 2500 actividades máx
     try:
         new_count = strava_service.sync_activities(user, db, pages=max_pages)
     except Exception as e:
