@@ -1,3 +1,4 @@
+import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -12,42 +13,49 @@ router = APIRouter(prefix="/api/strava", tags=["strava"])
 class TokenInput(BaseModel):
     access_token: str
     refresh_token: str
-    expires_at: int = 0  # epoch timestamp, 0 = forzar refresh en próxima llamada
+    expires_at: int = 0
 
 
 @router.post("/tokens/{user_id}")
 def set_tokens(user_id: int, body: TokenInput, db: Session = Depends(get_db)):
-    """Guarda los tokens de Strava directamente (sin flujo OAuth).
+    """Guarda los tokens de Strava directamente.
     Si el usuario no existe, lo crea automáticamente."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         user = User(id=user_id, name="Atleta", email=f"user{user_id}@goggins.local")
         db.add(user)
-        db.flush()  # para que tenga id antes del commit
-
-    # Obtener athlete_id desde Strava para guardar el vínculo
-    try:
-        athlete = strava_service.fetch_athlete(body.access_token)
-        user.strava_athlete_id = str(athlete.get("id", ""))
-    except Exception:
-        pass  # Si falla no bloqueamos — los tokens pueden ser válidos igualmente
+        db.flush()
 
     user.strava_access_token = body.access_token
     user.strava_refresh_token = body.refresh_token
-    user.strava_token_expires_at = body.expires_at
+    # Si no se pasa expires_at, asumimos que el token es válido 6h
+    user.strava_token_expires_at = body.expires_at if body.expires_at > 0 else int(time.time()) + 21600
+
+    # Verificar que el token funciona
+    athlete_name = None
+    try:
+        athlete = strava_service.fetch_athlete(body.access_token)
+        user.strava_athlete_id = str(athlete.get("id", ""))
+        athlete_name = athlete.get("firstname", "")
+    except Exception as e:
+        db.add(user)
+        db.commit()
+        return {
+            "message": "Tokens guardados pero no se pudo verificar con Strava",
+            "warning": str(e),
+        }
 
     db.add(user)
     db.commit()
 
-    return {"message": "Tokens guardados correctamente"}
+    return {
+        "message": f"Conectado como {athlete_name}",
+        "athlete": athlete_name,
+    }
 
 
 @router.get("/auth")
-def strava_auth(user_id: int = Query(..., description="ID del usuario")):
-    """
-    Redirige al usuario a la página de autorización de Strava.
-    Uso: GET /api/strava/auth?user_id=1
-    """
+def strava_auth(user_id: int = Query(...)):
     url = strava_service.get_auth_url(user_id)
     return RedirectResponse(url)
 
@@ -55,12 +63,9 @@ def strava_auth(user_id: int = Query(..., description="ID del usuario")):
 @router.get("/callback")
 def strava_callback(
     code: str = Query(...),
-    state: str = Query(...),  # user_id que enviamos en el auth
+    state: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    """
-    Callback de Strava tras la autorización. Guarda los tokens en la DB.
-    """
     user_id = int(state)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -79,33 +84,28 @@ def strava_callback(
 
     db.add(user)
     db.commit()
-
     return {"message": "Strava conectado correctamente", "athlete": athlete.get("firstname")}
 
 
 @router.post("/sync/{user_id}")
 def sync_strava(
     user_id: int,
-    pages: int = Query(default=2, ge=1, le=10),
+    pages: int = Query(default=1, ge=1, le=5),  # máx 5 páginas para respetar rate limits
     db: Session = Depends(get_db),
 ):
-    """
-    Sincroniza las últimas actividades de Strava del usuario.
-    Cada página trae 50 actividades (máx 10 páginas = 500 actividades).
-    """
+    """Sincroniza las últimas actividades (máx 50 por página, 5 páginas)."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-
     if not user.strava_access_token:
-        raise HTTPException(status_code=400, detail="Usuario no tiene Strava conectado")
+        raise HTTPException(status_code=400, detail="No hay token de Strava. Ve a Perfil y conecta.")
 
     try:
         new_count = strava_service.sync_activities(user, db, pages=pages)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error sincronizando Strava: {e}")
+        raise HTTPException(status_code=500, detail=f"Error de Strava: {e}")
 
-    return {"message": f"Sincronización completada", "new_activities": new_count}
+    return {"message": "Sincronización completada", "new_activities": new_count}
 
 
 @router.get("/activities/{user_id}")
@@ -114,12 +114,11 @@ def get_activities(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """Devuelve las actividades de Strava guardadas en la DB."""
     from app.models.strava_activity import StravaActivity
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return []  # no 404 — el frontend puede seguir funcionando
 
     activities = (
         db.query(StravaActivity)
@@ -148,10 +147,9 @@ def get_activities(
 
 @router.get("/status/{user_id}")
 def strava_status(user_id: int, db: Session = Depends(get_db)):
-    """Indica si el usuario tiene Strava conectado."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return {"connected": False, "athlete_id": None}
 
     return {
         "connected": bool(user.strava_access_token),

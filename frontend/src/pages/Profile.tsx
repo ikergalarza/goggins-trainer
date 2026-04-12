@@ -22,11 +22,16 @@ export default function Profile() {
         refresh_token: refreshToken,
         expires_at: 0,
       })
-      setMsg({ text: 'Tokens guardados. Ahora sincroniza desde el Dashboard.', ok: true })
+      const r_data = r.data
+      const text = r_data.warning
+        ? `${r_data.message} (${r_data.warning})`
+        : r_data.message
+      setMsg({ text, ok: !r_data.warning })
       setAccessToken('')
       setRefreshToken('')
-    } catch {
-      setMsg({ text: 'Error al guardar los tokens.', ok: false })
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || 'Error desconocido'
+      setMsg({ text: `Error: ${detail}`, ok: false })
     } finally {
       setSaving(false)
     }

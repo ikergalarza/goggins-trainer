@@ -39,10 +39,19 @@ def exchange_code(code: str) -> dict:
     return response.json()
 
 
-def refresh_token(user: User) -> User:
-    """Refresca el access token si ha expirado."""
+def refresh_token(user: User, db: Session) -> User:
+    """Refresca el access token si ha expirado.
+    Si no hay client_id/secret configurados, usa el token actual tal cual."""
+    # Si el token no ha expirado, no hacemos nada
     if user.strava_token_expires_at and user.strava_token_expires_at > time.time():
-        return user  # todavía válido
+        return user
+
+    # Si no tenemos credenciales de la app Strava, no podemos refrescar
+    if not settings.STRAVA_CLIENT_ID or not settings.STRAVA_CLIENT_SECRET:
+        return user  # usar el token actual y esperar que funcione
+
+    if not user.strava_refresh_token:
+        return user
 
     response = httpx.post(
         STRAVA_TOKEN_URL,
@@ -59,6 +68,8 @@ def refresh_token(user: User) -> User:
     user.strava_access_token = data["access_token"]
     user.strava_refresh_token = data["refresh_token"]
     user.strava_token_expires_at = data["expires_at"]
+    db.add(user)
+    db.commit()
     return user
 
 
@@ -89,9 +100,7 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
     Refresca el token si es necesario.
     Devuelve el número de actividades nuevas guardadas.
     """
-    user = refresh_token(user)
-    db.add(user)
-    db.commit()
+    user = refresh_token(user, db)
 
     new_count = 0
     for page in range(1, pages + 1):
@@ -108,7 +117,7 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
                 user_id=user.id,
                 strava_id=act["id"],
                 name=act.get("name"),
-                type=act.get("type"),
+                type=act.get("type") or act.get("sport_type"),
                 distance_m=act.get("distance"),
                 moving_time_s=act.get("moving_time"),
                 elapsed_time_s=act.get("elapsed_time"),
