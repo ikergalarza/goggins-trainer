@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(scoop install:*)",
-      "Bash(npm create:*)"
+      "Bash(npm create:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "Bash(pip install:*)",
+      "Bash(python3 -m pip install alembic)",
+      "Bash(python -m pip install alembic)",
+      "Bash(pip3 install:*)"
     ]
   }
 }
