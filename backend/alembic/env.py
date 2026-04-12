@@ -15,8 +15,10 @@ import app.models  # noqa: F401
 target_metadata = Base.metadata
 
 # Usar DATABASE_URL del entorno (Railway lo inyecta automáticamente)
-database_url = os.environ.get("DATABASE_URL")
+database_url = os.environ.get("DATABASE_URL", "")
 if database_url:
+    # Railway inyecta postgres://, SQLAlchemy necesita postgresql://
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
     config.set_main_option("sqlalchemy.url", database_url)
 
 

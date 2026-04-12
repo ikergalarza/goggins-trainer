@@ -2,7 +2,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
 
-engine = create_engine(settings.DATABASE_URL)
+# Railway inyecta DATABASE_URL como postgres://, SQLAlchemy necesita postgresql://
+_db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
+engine = create_engine(_db_url)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
