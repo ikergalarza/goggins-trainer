@@ -2,11 +2,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
 
-# Railway inyecta DATABASE_URL como postgres://, SQLAlchemy necesita postgresql://
+# Railway inyecta postgres://, SQLAlchemy necesita postgresql://
 _db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Railway PostgreSQL requiere SSL
-engine = create_engine(_db_url, connect_args={"sslmode": "require"})
+# Añadir sslmode=require si no está ya en la URL
+if "sslmode" not in _db_url:
+    _separator = "&" if "?" in _db_url else "?"
+    _db_url = f"{_db_url}{_separator}sslmode=require"
+
+engine = create_engine(_db_url)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
