@@ -5,12 +5,12 @@ import api from '../api'
 
 const USER_ID = 1
 
-const HR_ZONES = [
-  { zone: 'Z1', label: 'Recuperación', color: 'bg-blue-500', max: 60 },
-  { zone: 'Z2', label: 'Base aeróbica', color: 'bg-green-500', max: 70 },
-  { zone: 'Z3', label: 'Tempo', color: 'bg-yellow-500', max: 80 },
-  { zone: 'Z4', label: 'Umbral', color: 'bg-orange-500', max: 90 },
-  { zone: 'Z5', label: 'VO2 Max', color: 'bg-red-500', max: 100 },
+const HR_ZONES_META = [
+  { zone: 'Z1', label: 'Recuperación', color: 'bg-blue-500' },
+  { zone: 'Z2', label: 'Base aeróbica', color: 'bg-green-500' },
+  { zone: 'Z3', label: 'Tempo', color: 'bg-yellow-500' },
+  { zone: 'Z4', label: 'Umbral', color: 'bg-orange-500' },
+  { zone: 'Z5', label: 'VO2 Max', color: 'bg-red-500' },
 ]
 
 interface Activity {
@@ -29,6 +29,7 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [profile, setProfile] = useState<any>(null)
 
   useEffect(() => {
     api.get(`/api/strava/status/${USER_ID}`)
@@ -38,6 +39,7 @@ export default function Dashboard() {
       .then(r => setActivities(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
+    api.get(`/api/profile/${USER_ID}`).then(r => setProfile(r.data)).catch(() => {})
   }, [])
 
   const weeklyKm = activities
@@ -118,22 +120,43 @@ export default function Dashboard() {
       {/* Zonas cardíacas */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
         <h2 className="font-black text-lg mb-5">❤️ Zonas Cardíacas</h2>
-        <div className="space-y-3">
-          {HR_ZONES.map(z => (
-            <div key={z.zone} className="flex items-center gap-3">
-              <span className="text-xs font-black text-gray-500 w-6">{z.zone}</span>
-              <span className="text-sm text-gray-400 w-28">{z.label}</span>
-              <div className="flex-1 bg-gray-800 rounded-full h-2.5">
-                <div className={`${z.color} h-2.5 rounded-full opacity-30`} style={{ width: `${z.max}%` }} />
+        {profile?.hr_zones ? (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500 mb-3">
+              FCmáx {profile.hr_zones.hr_max} · FCrep {profile.hr_zones.hr_rest} · Karvonen
+            </p>
+            {HR_ZONES_META.map(z => {
+              const range = profile.hr_zones.zones?.[z.zone]
+              if (!range) return null
+              const pace = profile.target_paces?.[z.zone]
+              return (
+                <div key={z.zone} className="flex items-center gap-3">
+                  <span className="text-xs font-black text-gray-500 w-6">{z.zone}</span>
+                  <span className="text-sm text-gray-400 w-28">{z.label}</span>
+                  <span className="text-sm text-gray-300 font-semibold w-24">{range[0]}–{range[1]} bpm</span>
+                  {pace && <span className="text-xs text-gray-500">{pace.pace_fast}–{pace.pace_slow} /km</span>}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {HR_ZONES_META.map(z => (
+              <div key={z.zone} className="flex items-center gap-3">
+                <span className="text-xs font-black text-gray-500 w-6">{z.zone}</span>
+                <span className="text-sm text-gray-400 w-28">{z.label}</span>
+                <div className="flex-1 bg-gray-800 rounded-full h-2.5">
+                  <div className={`${z.color} h-2.5 rounded-full opacity-30`} style={{ width: '100%' }} />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-gray-600 mt-4">
-          Configura tu FC máxima en{' '}
-          <Link to="/profile" className="text-red-400 hover:underline">Perfil</Link>
-          {' '}para calcular las zonas.
-        </p>
+            ))}
+            <p className="text-xs text-gray-600 mt-4">
+              Configura tu edad y FC máx en{' '}
+              <Link to="/profile" className="text-red-400 hover:underline">Perfil</Link>
+              {' '}para calcular las zonas.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Últimas actividades */}

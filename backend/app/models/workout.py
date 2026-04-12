@@ -11,12 +11,22 @@ class WorkoutStatus(str, enum.Enum):
 
 
 class WorkoutType(str, enum.Enum):
+    # Running
     easy_run = "easy_run"
     tempo = "tempo"
     intervals = "intervals"
     long_run = "long_run"
     recovery = "recovery"
-    strength = "strength"
+    fartlek = "fartlek"
+    hill_repeats = "hill_repeats"
+    # Hyrox / fuerza
+    hyrox_sim = "hyrox_sim"              # simulacro Hyrox completo
+    hyrox_stations = "hyrox_stations"    # estaciones (burpees, sled, wall balls...)
+    strength_upper = "strength_upper"
+    strength_lower = "strength_lower"
+    strength_full = "strength_full"
+    cross_training = "cross_training"
+    # Otros
     rest = "rest"
 
 

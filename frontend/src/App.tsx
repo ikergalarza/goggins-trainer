@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Goals from './pages/Goals'
 import Activities from './pages/Activities'
 import Profile from './pages/Profile'
+import Records from './pages/Records'
 
 export default function App() {
   return (
@@ -11,6 +12,7 @@ export default function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="goals" element={<Goals />} />
+        <Route path="records" element={<Records />} />
         <Route path="activities" element={<Activities />} />
         <Route path="profile" element={<Profile />} />
       </Route>

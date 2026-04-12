@@ -12,10 +12,19 @@ class User(Base):
 
     # Datos físicos
     age = Column(Integer)
+    sex = Column(String, nullable=True)  # "M" | "F"
     weight_kg = Column(Float)
     height_cm = Column(Float)
     resting_heart_rate = Column(Integer)
     max_heart_rate = Column(Integer)
+
+    # Experiencia
+    years_training = Column(Integer, nullable=True)
+    experience_level = Column(String, nullable=True)  # beginner | intermediate | advanced
+    training_days_per_week = Column(Integer, nullable=True)
+
+    # VAM test (velocidad aeróbica máxima en m/s) — opcional, para calcular ritmos/zonas
+    vam_ms = Column(Float, nullable=True)
 
     # Zonas cardíacas (calculadas o manuales)
     heart_rate_zones = Column(JSON)  # {"z1": [0,120], "z2": [120,140], ...}
