@@ -1,3 +1,4 @@
+import logging
 import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -6,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.user import User
 from app.services import strava as strava_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/strava", tags=["strava"])
 
@@ -94,17 +97,24 @@ def sync_strava(
     db: Session = Depends(get_db),
 ):
     """Sincroniza las últimas actividades (máx 50 por página, 5 páginas)."""
+    logger.info(f"[sync] Petición de sync para user_id={user_id}, pages={pages}")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        logger.error(f"[sync] Usuario {user_id} no encontrado")
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if not user.strava_access_token:
+        logger.error(f"[sync] Usuario {user_id} sin token de Strava")
         raise HTTPException(status_code=400, detail="No hay token de Strava. Ve a Perfil y conecta.")
+
+    logger.info(f"[sync] Usuario encontrado: {user.name}, athlete_id={user.strava_athlete_id}")
 
     try:
         new_count = strava_service.sync_activities(user, db, pages=pages)
     except Exception as e:
+        logger.exception(f"[sync] Error durante sync: {e}")
         raise HTTPException(status_code=500, detail=f"Error de Strava: {e}")
 
+    logger.info(f"[sync] Sync completada: {new_count} nuevas actividades")
     return {"message": "Sincronización completada", "new_activities": new_count}
 
 

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
@@ -7,6 +8,8 @@ from fastapi.responses import FileResponse
 from app.api.routes import strava
 from app.db.database import engine, Base
 import app.models  # noqa
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
 
 @asynccontextmanager

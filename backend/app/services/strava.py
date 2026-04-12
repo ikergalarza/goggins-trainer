@@ -1,9 +1,12 @@
+import logging
 import time
 import httpx
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.user import User
 from app.models.strava_activity import StravaActivity
+
+logger = logging.getLogger(__name__)
 
 STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
@@ -42,15 +45,21 @@ def exchange_code(code: str) -> dict:
 def refresh_token(user: User, db: Session) -> User:
     """Refresca el access token si ha expirado.
     Si no hay client_id/secret configurados, usa el token actual tal cual."""
+    now = int(time.time())
+    logger.info(f"[refresh_token] user={user.id}, expires_at={user.strava_token_expires_at}, now={now}")
+
     # Si el token no ha expirado, no hacemos nada
     if user.strava_token_expires_at and user.strava_token_expires_at > time.time():
+        logger.info("[refresh_token] Token aún válido, no se refresca")
         return user
 
     # Si no tenemos credenciales de la app Strava, no podemos refrescar
     if not settings.STRAVA_CLIENT_ID or not settings.STRAVA_CLIENT_SECRET:
+        logger.warning("[refresh_token] No hay STRAVA_CLIENT_ID/SECRET, usando token actual")
         return user  # usar el token actual y esperar que funcione
 
     if not user.strava_refresh_token:
+        logger.warning("[refresh_token] No hay refresh_token guardado")
         return user
 
     response = httpx.post(
@@ -75,23 +84,35 @@ def refresh_token(user: User, db: Session) -> User:
 
 def fetch_activities(access_token: str, per_page: int = 30, page: int = 1) -> list[dict]:
     """Obtiene las actividades del atleta desde la API de Strava."""
+    logger.info(f"[fetch_activities] page={page}, per_page={per_page}")
     response = httpx.get(
         f"{STRAVA_API_BASE}/athlete/activities",
         headers={"Authorization": f"Bearer {access_token}"},
         params={"per_page": per_page, "page": page},
     )
+    logger.info(f"[fetch_activities] status={response.status_code}")
+    if response.status_code != 200:
+        logger.error(f"[fetch_activities] Error body: {response.text[:500]}")
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    logger.info(f"[fetch_activities] Recibidas {len(data)} actividades")
+    return data
 
 
 def fetch_athlete(access_token: str) -> dict:
     """Obtiene el perfil del atleta."""
+    logger.info("[fetch_athlete] Consultando perfil del atleta...")
     response = httpx.get(
         f"{STRAVA_API_BASE}/athlete",
         headers={"Authorization": f"Bearer {access_token}"},
     )
+    logger.info(f"[fetch_athlete] status={response.status_code}")
+    if response.status_code != 200:
+        logger.error(f"[fetch_athlete] Error body: {response.text[:500]}")
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    logger.info(f"[fetch_athlete] Atleta: {data.get('firstname')} {data.get('lastname')} (id={data.get('id')})")
+    return data
 
 
 def sync_activities(user: User, db: Session, pages: int = 2) -> int:
@@ -100,22 +121,36 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
     Refresca el token si es necesario.
     Devuelve el número de actividades nuevas guardadas.
     """
+    logger.info(f"[sync_activities] Iniciando sync para user={user.id}, pages={pages}")
+    logger.info(f"[sync_activities] Token present: {bool(user.strava_access_token)}, token length: {len(user.strava_access_token or '')}")
+
     user = refresh_token(user, db)
 
     new_count = 0
     for page in range(1, pages + 1):
-        activities = fetch_activities(user.strava_access_token, per_page=50, page=page)
+        try:
+            activities = fetch_activities(user.strava_access_token, per_page=50, page=page)
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[sync_activities] HTTP error al obtener actividades: {e.response.status_code} - {e.response.text[:500]}")
+            raise
+        except Exception as e:
+            logger.error(f"[sync_activities] Error inesperado: {type(e).__name__}: {e}")
+            raise
+
         if not activities:
+            logger.info(f"[sync_activities] Página {page} vacía, terminando")
             break
 
+        logger.info(f"[sync_activities] Página {page}: {len(activities)} actividades")
         for act in activities:
-            exists = db.query(StravaActivity).filter_by(strava_id=act["id"]).first()
+            strava_id = act["id"]
+            exists = db.query(StravaActivity).filter_by(strava_id=strava_id).first()
             if exists:
                 continue
 
             record = StravaActivity(
                 user_id=user.id,
-                strava_id=act["id"],
+                strava_id=strava_id,
                 name=act.get("name"),
                 type=act.get("type") or act.get("sport_type"),
                 distance_m=act.get("distance"),
@@ -133,5 +168,7 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
             new_count += 1
 
         db.commit()
+        logger.info(f"[sync_activities] Página {page} procesada, {new_count} nuevas hasta ahora")
 
+    logger.info(f"[sync_activities] Sync completada: {new_count} actividades nuevas")
     return new_count

@@ -27,6 +27,7 @@ export default function Dashboard() {
   const [activities, setActivities] = useState<Activity[]>([])
   const [stravaConnected, setStravaConnected] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -49,12 +50,16 @@ export default function Dashboard() {
 
   const handleSync = async () => {
     setSyncing(true)
+    setSyncMsg(null)
     try {
-      await api.post(`/api/strava/sync/${USER_ID}`)
+      const syncRes = await api.post(`/api/strava/sync/${USER_ID}`)
       const r = await api.get(`/api/strava/activities/${USER_ID}?limit=5`)
       setActivities(r.data)
-    } catch (e) {
-      console.error(e)
+      setSyncMsg({ text: `Sincronización OK: ${syncRes.data.new_activities} nuevas actividades`, ok: true })
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || 'Error desconocido'
+      setSyncMsg({ text: `Error: ${detail}`, ok: false })
+      console.error('Sync error:', e?.response?.data || e)
     } finally {
       setSyncing(false)
     }
@@ -87,6 +92,10 @@ export default function Dashboard() {
           </Link>
         )}
       </div>
+
+      {syncMsg && (
+        <p className={`text-sm ${syncMsg.ok ? 'text-green-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
