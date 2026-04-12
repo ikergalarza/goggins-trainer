@@ -79,7 +79,7 @@ export default function Dashboard() {
           </button>
         ) : (
           <a
-            href={`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/strava/auth?user_id=${USER_ID}`}
+            href={`/api/strava/auth?user_id=${USER_ID}`}
             className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
           >
             Conectar Strava
