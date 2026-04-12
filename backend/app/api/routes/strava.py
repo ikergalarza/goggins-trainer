@@ -1,11 +1,42 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.user import User
 from app.services import strava as strava_service
 
 router = APIRouter(prefix="/api/strava", tags=["strava"])
+
+
+class TokenInput(BaseModel):
+    access_token: str
+    refresh_token: str
+    expires_at: int = 0  # epoch timestamp, 0 = forzar refresh en próxima llamada
+
+
+@router.post("/tokens/{user_id}")
+def set_tokens(user_id: int, body: TokenInput, db: Session = Depends(get_db)):
+    """Guarda los tokens de Strava directamente (sin flujo OAuth)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Obtener athlete_id desde Strava para guardar el vínculo
+    try:
+        athlete = strava_service.fetch_athlete(body.access_token)
+        user.strava_athlete_id = str(athlete.get("id", ""))
+    except Exception:
+        pass  # Si falla no bloqueamos — los tokens pueden ser válidos igualmente
+
+    user.strava_access_token = body.access_token
+    user.strava_refresh_token = body.refresh_token
+    user.strava_token_expires_at = body.expires_at
+
+    db.add(user)
+    db.commit()
+
+    return {"message": "Tokens guardados correctamente"}
 
 
 @router.get("/auth")
