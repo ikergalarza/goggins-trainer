@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import api from '../api'
 
 const USER_ID = 1
@@ -42,7 +43,11 @@ export default function Activities() {
       ) : (
         <div className="bg-gray-900 border border-gray-800 rounded-xl divide-y divide-gray-800">
           {activities.map(a => (
-            <div key={a.id} className="flex items-center justify-between px-6 py-4">
+            <Link
+              key={a.id}
+              to={`/activities/${a.id}`}
+              className="flex items-center justify-between px-6 py-4 hover:bg-gray-800/40 transition-colors"
+            >
               <div className="flex-1">
                 <p className="font-medium text-sm">{a.name}</p>
                 <p className="text-xs text-gray-500 mt-0.5">
@@ -72,7 +77,7 @@ export default function Activities() {
                   </div>
                 )}
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}

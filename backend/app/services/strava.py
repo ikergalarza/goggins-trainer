@@ -99,6 +99,41 @@ def fetch_activities(access_token: str, per_page: int = 30, page: int = 1) -> li
     return data
 
 
+def fetch_activity_full(access_token: str, activity_id: int) -> dict:
+    """Devuelve la actividad completa incluyendo laps y segment_efforts."""
+    logger.info(f"[fetch_activity_full] activity_id={activity_id}")
+    response = httpx.get(
+        f"{STRAVA_API_BASE}/activities/{activity_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"include_all_efforts": "true"},
+        timeout=30.0,
+    )
+    if response.status_code != 200:
+        logger.error(f"[fetch_activity_full] {response.status_code} {response.text[:300]}")
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_activity_streams(access_token: str, activity_id: int) -> dict:
+    """Devuelve los streams (series temporales) de una actividad.
+
+    Pedimos los más útiles para análisis de carrera/Hyrox: distance, time,
+    heartrate, altitude, velocity_smooth, cadence.
+    """
+    logger.info(f"[fetch_activity_streams] activity_id={activity_id}")
+    types = "distance,time,heartrate,altitude,velocity_smooth,cadence"
+    response = httpx.get(
+        f"{STRAVA_API_BASE}/activities/{activity_id}/streams",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"keys": types, "key_by_type": "true"},
+        timeout=30.0,
+    )
+    if response.status_code != 200:
+        logger.error(f"[fetch_activity_streams] {response.status_code} {response.text[:300]}")
+    response.raise_for_status()
+    return response.json()
+
+
 def fetch_athlete(access_token: str) -> dict:
     """Obtiene el perfil del atleta."""
     logger.info("[fetch_athlete] Consultando perfil del atleta...")

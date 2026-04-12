@@ -168,6 +168,91 @@ def get_activities(
     ]
 
 
+@router.get("/activity/{user_id}/{activity_id}")
+def get_activity_detail(
+    user_id: int,
+    activity_id: int,
+    refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    """Devuelve el detalle completo de una actividad: streams, laps, segmentos.
+
+    La primera vez los descarga de Strava y los cachea en `activity_details`.
+    Las siguientes llamadas usan la caché. `?refresh=true` fuerza recarga.
+    """
+    from app.models.strava_activity import StravaActivity
+    from app.models.activity_detail import ActivityDetail
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Acepta el id interno o el strava_id
+    activity = (
+        db.query(StravaActivity)
+        .filter(
+            (StravaActivity.id == activity_id) | (StravaActivity.strava_id == activity_id),
+            StravaActivity.user_id == user_id,
+        )
+        .first()
+    )
+    if not activity:
+        raise HTTPException(status_code=404, detail="Actividad no encontrada")
+
+    detail = (
+        db.query(ActivityDetail)
+        .filter(ActivityDetail.activity_id == activity.id)
+        .first()
+    )
+
+    if detail is None or refresh:
+        if not user.strava_access_token:
+            raise HTTPException(status_code=400, detail="Sin token de Strava")
+        try:
+            user = strava_service.refresh_token(user, db)
+            full = strava_service.fetch_activity_full(user.strava_access_token, activity.strava_id)
+        except Exception as e:
+            logger.exception(f"[activity] fetch_activity_full falló: {e}")
+            raise HTTPException(status_code=502, detail=f"Error de Strava: {e}")
+
+        try:
+            streams = strava_service.fetch_activity_streams(user.strava_access_token, activity.strava_id)
+        except Exception as e:
+            logger.warning(f"[activity] streams falló (no bloqueante): {e}")
+            streams = {}
+
+        if detail is None:
+            detail = ActivityDetail(activity_id=activity.id)
+        detail.streams = streams
+        detail.laps = full.get("laps") or []
+        detail.segment_efforts = full.get("segment_efforts") or []
+        db.add(detail)
+        db.commit()
+        db.refresh(detail)
+
+    return {
+        "activity": {
+            "id": activity.id,
+            "strava_id": activity.strava_id,
+            "name": activity.name,
+            "type": activity.type,
+            "distance_km": round(activity.distance_m / 1000, 2) if activity.distance_m else None,
+            "moving_time_min": round(activity.moving_time_s / 60, 1) if activity.moving_time_s else None,
+            "elapsed_time_s": activity.elapsed_time_s,
+            "elevation_gain_m": activity.elevation_gain_m,
+            "average_heartrate": activity.average_heartrate,
+            "max_heartrate": activity.max_heartrate,
+            "average_speed_ms": activity.average_speed_ms,
+            "max_speed_ms": activity.max_speed_ms,
+            "start_date": activity.start_date,
+        },
+        "streams": detail.streams or {},
+        "laps": detail.laps or [],
+        "segment_efforts": detail.segment_efforts or [],
+        "fetched_at": detail.fetched_at.isoformat() if detail.fetched_at else None,
+    }
+
+
 @router.get("/weekly_stats/{user_id}")
 def weekly_stats(
     user_id: int,

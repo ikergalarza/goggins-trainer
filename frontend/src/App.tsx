@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Goals from './pages/Goals'
 import Activities from './pages/Activities'
+import ActivityDetail from './pages/ActivityDetail'
 import Profile from './pages/Profile'
 import Records from './pages/Records'
 import Plan from './pages/Plan'
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="chat" element={<Chat />} />
         <Route path="records" element={<Records />} />
         <Route path="activities" element={<Activities />} />
+        <Route path="activities/:activityId" element={<ActivityDetail />} />
         <Route path="profile" element={<Profile />} />
       </Route>
     </Routes>

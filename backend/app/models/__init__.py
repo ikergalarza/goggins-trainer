@@ -5,6 +5,7 @@ from app.models.strava_activity import StravaActivity
 from app.models.personal_record import PersonalRecord
 from app.models.chat_message import ChatMessage
 from app.models.ai_insight import AiInsight
+from app.models.activity_detail import ActivityDetail
 
 __all__ = [
     "User",
@@ -14,4 +15,5 @@ __all__ = [
     "PersonalRecord",
     "ChatMessage",
     "AiInsight",
+    "ActivityDetail",
 ]
