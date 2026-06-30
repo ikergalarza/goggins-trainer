@@ -231,6 +231,44 @@ export function formatIntervalSet(s: IntervalSet): string {
   return out
 }
 
+// --- Ritmo / velocidad equivalente -----------------------------------------
+// A partir de distancia (km) y duración (min) calcula el ritmo (carrera/natación)
+// o la velocidad (bici) según la disciplina. Devuelve null si no aplica o faltan
+// datos.
+export interface PaceInfo {
+  label: string  // "Ritmo" | "Velocidad"
+  value: string  // "5:43 /km" | "1:55 /100m" | "32.4 km/h"
+}
+
+function mmss(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60)
+  const s = Math.round(totalSeconds - m * 60)
+  if (s === 60) return `${m + 1}:00`
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+export function paceOrSpeed(
+  type: string,
+  distanceKm: number | null | undefined,
+  durationMin: number | null | undefined,
+): PaceInfo | null {
+  if (!distanceKm || !durationMin || distanceKm <= 0 || durationMin <= 0) return null
+  const disc = disciplineOf(type)
+  if (disc === 'run') {
+    const secPerKm = (durationMin * 60) / distanceKm
+    return { label: 'Ritmo', value: `${mmss(secPerKm)} /km` }
+  }
+  if (disc === 'swim') {
+    const secPer100 = (durationMin * 60) / (distanceKm * 10) // 1 km = 10 × 100 m
+    return { label: 'Ritmo', value: `${mmss(secPer100)} /100m` }
+  }
+  if (disc === 'bike') {
+    const kmh = distanceKm / (durationMin / 60)
+    return { label: 'Velocidad', value: `${kmh.toFixed(1)} km/h` }
+  }
+  return null
+}
+
 export const STATUS_LABELS: Record<string, string> = {
   planned: 'Planificado',
   completed: 'Completado',

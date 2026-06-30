@@ -76,3 +76,23 @@ describe('disciplineOf', () => {
     expect(disciplineOf('tipo_inexistente')).toBe('run')
   })
 })
+
+import { paceOrSpeed } from './workoutMeta'
+
+describe('paceOrSpeed', () => {
+  it('carrera devuelve ritmo min/km', () => {
+    expect(paceOrSpeed('easy_run', 10, 50)).toEqual({ label: 'Ritmo', value: '5:00 /km' })
+  })
+  it('natación devuelve ritmo min/100m', () => {
+    // 30 min / (1.5 km * 10 = 15 × 100m) = 2:00 /100m
+    expect(paceOrSpeed('swim', 1.5, 30)).toEqual({ label: 'Ritmo', value: '2:00 /100m' })
+  })
+  it('bici devuelve velocidad km/h', () => {
+    expect(paceOrSpeed('bike', 40, 80)).toEqual({ label: 'Velocidad', value: '30.0 km/h' })
+  })
+  it('sin datos o disciplina sin ritmo devuelve null', () => {
+    expect(paceOrSpeed('easy_run', null, 50)).toBeNull()
+    expect(paceOrSpeed('mobility', 5, 30)).toBeNull()
+    expect(paceOrSpeed('rest', 0, 0)).toBeNull()
+  })
+})

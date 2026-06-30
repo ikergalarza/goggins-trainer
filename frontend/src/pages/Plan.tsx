@@ -8,6 +8,7 @@ import {
   disciplineOf,
   themeOf,
   parseIntervals,
+  paceOrSpeed,
   DISCIPLINE_ICONS,
   DISCIPLINE_LABELS,
   DISCIPLINE_THEME,
@@ -265,22 +266,22 @@ export default function Plan() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-black tracking-tight">🗓️ Plan de Entrenamiento</h1>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">🗓️ Plan de Entrenamiento</h1>
           <p className="text-gray-500 text-sm mt-1">Periodización generada por IA basada en tu objetivo.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button
             onClick={handleMatch}
-            className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-bold"
+            className="bg-gray-800 hover:bg-gray-700 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-bold"
           >
             🔗 Emparejar Strava
           </button>
           <button
             onClick={handleGenerate}
             disabled={generating || !selectedGoalId}
-            className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold"
+            className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-bold"
           >
             {generating ? '⏳ Generando...' : workouts.length > 0 ? '🔄 Regenerar plan' : '⚡ Generar plan'}
           </button>
@@ -409,7 +410,7 @@ export default function Plan() {
                     })()}
                   </div>
                 </div>
-                <div className="grid grid-cols-7 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
                   {DAY_NAMES.map((dn, i) => {
                     const dayDate = new Date(monday)
                     dayDate.setDate(dayDate.getDate() + i)
@@ -433,7 +434,7 @@ export default function Plan() {
                           e.preventDefault()
                           handleDropOnDay(dayKey)
                         }}
-                        className={`min-h-[90px] rounded-lg p-2 transition-colors ${
+                        className={`flex md:block gap-3 md:gap-0 rounded-lg p-2 min-h-[52px] md:min-h-[90px] transition-colors ${
                           isDragOver
                             ? 'border-2 border-red-400 bg-red-950/30'
                             : isToday
@@ -441,10 +442,10 @@ export default function Plan() {
                               : 'bg-gray-950/60 border border-gray-800'
                         }`}
                       >
-                        <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">
+                        <div className={`text-[10px] uppercase font-bold mb-0 md:mb-1 shrink-0 w-12 md:w-auto ${isToday ? 'text-red-400' : 'text-gray-500'}`}>
                           {dn} {dayDate.getDate()}
                         </div>
-                        <div className="space-y-1">
+                        <div className="flex-1 space-y-1">
                           {workoutsToday.map(w => (
                             <WorkoutCard
                               key={w.id}
@@ -547,6 +548,19 @@ export default function Plan() {
                   <p className="font-bold text-red-400">{selectedWorkout.planned_heart_rate_zone}</p>
                 </div>
               )}
+              {(() => {
+                const pace = paceOrSpeed(
+                  selectedWorkout.type,
+                  selectedWorkout.planned_distance_km,
+                  selectedWorkout.planned_duration_min,
+                )
+                return pace ? (
+                  <div className="bg-black/30 rounded-lg p-2">
+                    <p className="text-xs text-gray-500">{pace.label}</p>
+                    <p className="font-bold text-red-400">{pace.value}</p>
+                  </div>
+                ) : null
+              })()}
             </div>
 
             {selectedWorkout.instructions && (() => {

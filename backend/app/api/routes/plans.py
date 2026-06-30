@@ -138,6 +138,7 @@ def update_workout(workout_id: int, body: WorkoutUpdate, current: User = Depends
         raise HTTPException(status_code=404, detail="Workout no encontrado")
     authorize_user(workout.user_id, current)
 
+    was_completed = workout.status == WorkoutStatus.completed
     data = body.model_dump(exclude_unset=True)
     if "status" in data:
         try:
@@ -164,6 +165,16 @@ def update_workout(workout_id: int, body: WorkoutUpdate, current: User = Depends
     db.add(workout)
     db.commit()
     db.refresh(workout)
+
+    # Si se acaba de marcar como completado (y no lo estaba), Goggins deja
+    # feedback en el chat (import diferido para evitar ciclos).
+    if workout.status == WorkoutStatus.completed and not was_completed:
+        try:
+            from app.services import workout_feedback
+            workout_feedback.generate_for_completed(current, [workout], db)
+        except Exception as e:
+            logger.warning(f"[plans] feedback de completado falló: {e}")
+
     return _serialize_workout(workout)
 
 

@@ -557,6 +557,7 @@ def match_strava_to_workouts(user: User, db: Session) -> int:
         .all()
     )
     matched = 0
+    newly_completed: list[Workout] = []
     for w in workouts:
         if not w.date:
             continue
@@ -581,8 +582,16 @@ def match_strava_to_workouts(user: User, db: Session) -> int:
         w.actual_avg_heart_rate = int(activity.average_heartrate) if activity.average_heartrate else None
         w.actual_max_heart_rate = int(activity.max_heartrate) if activity.max_heartrate else None
         w.status = WorkoutStatus.completed
+        newly_completed.append(w)
         matched += 1
     if matched:
         db.commit()
+        # Feedback automático de Goggins para los recién completados (import
+        # diferido para evitar ciclos de importación).
+        try:
+            from app.services import workout_feedback
+            workout_feedback.generate_for_completed(user, newly_completed, db)
+        except Exception as e:
+            logger.warning(f"[plan_generator] feedback de completado falló: {e}")
     logger.info(f"[plan_generator] Empareados {matched} workouts con Strava")
     return matched

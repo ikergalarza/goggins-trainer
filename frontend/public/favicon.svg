@@ -1,35 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <rect width="32" height="32" rx="7" fill="#0a0a0a"/>
-  <!-- Llama exterior roja -->
+  <!-- Rayo de marca (⚡) en degradado rojo→naranja -->
+  <defs>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#dc2626"/>
+    </linearGradient>
+  </defs>
   <path
-    d="M16 3
-       C 14 7, 11 9, 10 12
-       C 9 14, 9.5 16, 11 17
-       C 10 18.5, 8.5 20, 9 22.5
-       C 9.5 26, 12.5 29, 16 29
-       C 19.5 29, 22.5 26, 23 22.5
-       C 23.5 20, 22 18.5, 21 17
-       C 22.5 16, 23 14, 22 12
-       C 21 9, 18 7, 16 3 Z"
-    fill="#dc2626"/>
-  <!-- Llama interior naranja -->
-  <path
-    d="M16 10
-       C 14.5 12, 13 14, 13 16.5
-       C 13 17.5, 13.5 18, 14 18.5
-       C 13 20, 12.5 21.5, 13 23
-       C 13.5 25, 14.5 26, 16 26
-       C 17.5 26, 18.5 25, 19 23
-       C 19.5 21.5, 19 20, 18 18.5
-       C 18.5 18, 19 17.5, 19 16.5
-       C 19 14, 17.5 12, 16 10 Z"
-    fill="#f97316"/>
-  <!-- Núcleo amarillo -->
-  <path
-    d="M16 17
-       C 15 18.5, 14.5 20, 15 21.5
-       C 15.2 22.5, 15.5 23, 16 23.5
-       C 16.5 23, 16.8 22.5, 17 21.5
-       C 17.5 20, 17 18.5, 16 17 Z"
-    fill="#fde047"/>
+    d="M18.5 3 L8 18 h6 l-2.5 11 L24 13 h-6 z"
+    fill="url(#bolt)"
+    stroke="#fca5a5"
+    stroke-width="0.6"
+    stroke-linejoin="round"/>
 </svg>

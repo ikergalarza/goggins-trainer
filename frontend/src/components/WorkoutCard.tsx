@@ -1,4 +1,4 @@
-import { disciplineOf, themeOf, TYPE_LABELS, DISCIPLINE_ICONS } from './workoutMeta'
+import { disciplineOf, themeOf, TYPE_LABELS, DISCIPLINE_ICONS, paceOrSpeed } from './workoutMeta'
 
 interface WorkoutCardWorkout {
   id: number
@@ -40,6 +40,9 @@ export default function WorkoutCard({
       ? `${w.planned_duration_min}'`
       : null
 
+  // Ritmo (carrera/natación) o velocidad (bici) equivalente.
+  const pace = paceOrSpeed(w.type, w.planned_distance_km, w.planned_duration_min)
+
   return (
     <button
       draggable
@@ -73,6 +76,9 @@ export default function WorkoutCard({
             <span className="opacity-90">{w.planned_heart_rate_zone}</span>
           )}
         </div>
+      )}
+      {pace && (
+        <div className="mt-0.5 text-[9px] font-semibold opacity-90">{pace.value}</div>
       )}
     </button>
   )
