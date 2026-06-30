@@ -207,7 +207,6 @@ def analyze(user: User, db: Session) -> dict[str, Any]:
         system=SYSTEM_PROMPT,
         user_message=user_message,
         max_tokens=2500,
-        temperature=0.6,
     )
     data, summary = _parse_response(raw)
     logger.info(f"[fitness_analysis] Análisis listo, data_keys={list(data.keys()) if data else None}")

@@ -30,14 +30,13 @@ def complete(
     *,
     model: str = DEFAULT_MODEL,
     max_tokens: int = 2048,
-    temperature: float = 0.7,
 ) -> str:
     """Helper simple para un prompt user/system de una sola vuelta."""
+    # Nota: claude-opus-4-8 deprecó el parámetro `temperature`; no se envía.
     client = get_client()
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        temperature=temperature,
         system=system,
         messages=[{"role": "user", "content": user_message}],
     )

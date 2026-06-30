@@ -417,7 +417,6 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
         with client.messages.stream(
             model=ai_client.DEFAULT_MODEL,
             max_tokens=6000,
-            temperature=0.6,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         ) as stream:

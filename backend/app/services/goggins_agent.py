@@ -324,7 +324,6 @@ def chat_stream(
             with client.messages.stream(
                 model=ai_client.DEFAULT_MODEL,
                 max_tokens=2500,
-                temperature=0.85,
                 system=full_system,
                 tools=agent_tools.TOOLS,
                 messages=messages,
