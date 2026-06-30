@@ -1,5 +1,59 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import api from '../api'
+
+// Markdown inline minimalista: **bold**, *italic*, `code`. No depende de libs.
+function renderInline(text: string): ReactNode[] {
+  const nodes: ReactNode[] = []
+  const regex = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g
+  let last = 0
+  let m: RegExpExecArray | null
+  let key = 0
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index))
+    const tok = m[0]
+    if (tok.startsWith('**')) {
+      nodes.push(<strong key={key++} className="font-bold text-white">{tok.slice(2, -2)}</strong>)
+    } else if (tok.startsWith('`')) {
+      nodes.push(<code key={key++} className="bg-black/40 text-red-300 px-1 rounded text-[12px]">{tok.slice(1, -1)}</code>)
+    } else {
+      nodes.push(<em key={key++} className="italic">{tok.slice(1, -1)}</em>)
+    }
+    last = m.index + tok.length
+  }
+  if (last < text.length) nodes.push(text.slice(last))
+  return nodes
+}
+
+function Markdown({ text }: { text: string }) {
+  const lines = text.split('\n')
+  const blocks: ReactNode[] = []
+  let listBuf: string[] = []
+  const flushList = () => {
+    if (listBuf.length === 0) return
+    blocks.push(
+      <ul key={`ul-${blocks.length}`} className="list-disc list-inside space-y-0.5 my-1">
+        {listBuf.map((li, i) => <li key={i}>{renderInline(li)}</li>)}
+      </ul>
+    )
+    listBuf = []
+  }
+  for (const raw of lines) {
+    const line = raw.trimEnd()
+    const liMatch = line.match(/^\s*[-*]\s+(.*)$/)
+    if (liMatch) {
+      listBuf.push(liMatch[1])
+      continue
+    }
+    flushList()
+    if (line === '') {
+      blocks.push(<div key={`sp-${blocks.length}`} className="h-2" />)
+    } else {
+      blocks.push(<p key={`p-${blocks.length}`}>{renderInline(line)}</p>)
+    }
+  }
+  flushList()
+  return <div className="space-y-0">{blocks}</div>
+}
 
 const USER_ID = 1
 
@@ -29,11 +83,14 @@ const TOOL_LABELS: Record<string, string> = {
 }
 
 const SUGGESTIONS = [
-  '¿Cómo voy con mi preparación?',
   '¿Qué entreno toca hoy?',
+  'Mueve la tirada larga del sábado al domingo',
+  'Marca el entreno de hoy como completado',
+  'Añade series el miércoles, 6x800m',
+  'Cambia el de mañana a recovery 30\'',
+  'Quita el descanso del viernes',
+  '¿Cómo voy con mi preparación?',
   'No tengo ganas de entrenar hoy',
-  '¿Cómo mejoro mi ritmo de umbral?',
-  '¿Qué hago si me duele la rodilla?',
 ]
 
 export default function Chat() {
@@ -188,7 +245,7 @@ export default function Chat() {
           <div className="text-center text-gray-500 mt-8 space-y-4">
             <p className="text-6xl">💀</p>
             <p className="text-sm">Aún no has hablado con Goggins.</p>
-            <p className="text-xs text-gray-600">Pregúntale lo que quieras: estado, motivación, técnica, planificación...</p>
+            <p className="text-xs text-gray-600">Pídele que <span className="text-red-400 font-bold">modifique tu plan</span>: mover, añadir, quitar o marcar entrenos. También responde sobre técnica, estado y motivación.</p>
             <div className="flex flex-wrap gap-2 justify-center mt-6">
               {SUGGESTIONS.map(s => (
                 <button
@@ -209,9 +266,9 @@ export default function Chat() {
             className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap ${
+              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                 m.role === 'user'
-                  ? 'bg-red-600 text-white rounded-br-sm'
+                  ? 'bg-red-600 text-white rounded-br-sm whitespace-pre-wrap'
                   : 'bg-gray-800 text-gray-100 border border-gray-700 rounded-bl-sm'
               }`}
             >
@@ -221,7 +278,7 @@ export default function Chat() {
               {m.toolEvents && m.toolEvents.length > 0 && (
                 <ToolEventList events={m.toolEvents} />
               )}
-              {m.content}
+              {m.role === 'assistant' ? <Markdown text={m.content} /> : m.content}
             </div>
           </div>
         ))}
@@ -229,10 +286,10 @@ export default function Chat() {
         {/* Mensaje en streaming */}
         {streaming && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm whitespace-pre-wrap bg-gray-800 text-gray-100 border border-red-900/40">
+            <div className="max-w-[85%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-gray-800 text-gray-100 border border-red-900/40">
               <p className="text-[10px] font-black text-red-400 uppercase tracking-wider mb-1">💀 Goggins</p>
               {streamTools.length > 0 && <ToolEventList events={streamTools} />}
-              {streamText || (streamTools.length === 0 && (
+              {streamText ? <Markdown text={streamText} /> : (streamTools.length === 0 && (
                 <span className="inline-flex gap-1">
                   <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                   <span className="w-1.5 h-1.5 bg-red-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />

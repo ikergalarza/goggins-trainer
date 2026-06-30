@@ -140,9 +140,19 @@ export default function Plan() {
     const url = `${baseUrl}/api/plans/generate_stream/${USER_ID}/${selectedGoalId}`
 
     try {
-      const res = await fetch(url, { method: 'POST' })
+      let res: Response
+      try {
+        res = await fetch(url, { method: 'POST' })
+      } catch (netErr: any) {
+        throw new Error(
+          `No se pudo conectar con el backend (${url}). ` +
+          `¿Está el servidor arrancado y VITE_API_URL configurada? Detalle: ${netErr?.message || netErr}`
+        )
+      }
       if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status}`)
+        let body = ''
+        try { body = await res.text() } catch { /* noop */ }
+        throw new Error(`HTTP ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}`)
       }
 
       const reader = res.body.getReader()

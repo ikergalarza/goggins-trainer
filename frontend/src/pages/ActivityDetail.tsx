@@ -37,6 +37,24 @@ interface ActivityDetailResponse {
     average_speed_ms: number | null
     max_speed_ms: number | null
     start_date: string
+    average_cadence_spm?: number | null
+    max_cadence_spm?: number | null
+    average_stride_m?: number | null
+    calories?: number | null
+    suffer_score?: number | null
+    relative_effort?: number | null
+    average_temp_c?: number | null
+    average_watts?: number | null
+    max_watts?: number | null
+    weighted_average_watts?: number | null
+    kilojoules?: number | null
+    device_name?: string | null
+    gear_id?: string | null
+    pr_count?: number | null
+    achievement_count?: number | null
+    kudos_count?: number | null
+    description?: string | null
+    is_run?: boolean
   }
   streams: Record<string, StreamData>
   laps: any[]
@@ -112,20 +130,27 @@ export default function ActivityDetail() {
   const heartrate = streams.heartrate?.data || []
   const altitude = streams.altitude?.data || []
   const velocity = streams.velocity_smooth?.data || []
+  const cadenceStream = streams.cadence?.data || []
+  const isRun = a.is_run ?? (a.type || '').toLowerCase().startsWith('run')
 
   const chartPoints: any[] = []
   if (distance.length > 0) {
     const len = Math.min(distance.length, heartrate.length || Infinity, altitude.length || Infinity)
     for (let i = 0; i < len; i++) {
+      const rawCad = cadenceStream[i]
+      // Strava devuelve cadencia por pierna en carrera → ×2 para pasos/min
+      const cad = rawCad != null ? (isRun ? rawCad * 2 : rawCad) : null
       chartPoints.push({
         km: +(distance[i] / 1000).toFixed(2),
         hr: heartrate[i] ?? null,
         elev: altitude[i] ?? null,
-        pace: velocity[i] ? +(1000 / velocity[i] / 60).toFixed(2) : null, // min/km como decimal
+        pace: velocity[i] ? +(1000 / velocity[i] / 60).toFixed(2) : null,
+        cad,
       })
     }
   }
   const chartData = downsample(chartPoints, 250)
+  const hasCadenceStream = chartData.some(p => p.cad != null)
 
   return (
     <div className="space-y-6">
@@ -175,6 +200,55 @@ export default function ActivityDetail() {
           </p>
         </div>
       </div>
+
+      {/* Stats extra: cadencia, zancada, calorías, esfuerzo, potencia, temperatura */}
+      {(a.average_cadence_spm || a.average_stride_m || a.calories || a.relative_effort != null ||
+        a.suffer_score != null || a.average_watts || a.average_temp_c != null) && (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          {a.average_cadence_spm != null && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-[10px] text-gray-500 uppercase">Cadencia media</p>
+              <p className="text-xl font-black text-orange-400 mt-1">{Math.round(a.average_cadence_spm)} <span className="text-xs text-gray-500 font-normal">spm</span></p>
+              {a.max_cadence_spm != null && (
+                <p className="text-[10px] text-gray-600 mt-0.5">Máx {Math.round(a.max_cadence_spm)}</p>
+              )}
+            </div>
+          )}
+          {a.average_stride_m != null && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-[10px] text-gray-500 uppercase">Zancada media</p>
+              <p className="text-xl font-black text-amber-400 mt-1">{a.average_stride_m.toFixed(2)} <span className="text-xs text-gray-500 font-normal">m</span></p>
+            </div>
+          )}
+          {a.calories != null && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-[10px] text-gray-500 uppercase">Calorías</p>
+              <p className="text-xl font-black text-yellow-400 mt-1">{Math.round(a.calories)} <span className="text-xs text-gray-500 font-normal">kcal</span></p>
+            </div>
+          )}
+          {(a.relative_effort != null || a.suffer_score != null) && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-[10px] text-gray-500 uppercase">Esfuerzo relativo</p>
+              <p className="text-xl font-black text-red-400 mt-1">{Math.round((a.relative_effort ?? a.suffer_score) as number)}</p>
+            </div>
+          )}
+          {a.average_watts != null && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-[10px] text-gray-500 uppercase">Potencia media</p>
+              <p className="text-xl font-black text-purple-400 mt-1">{Math.round(a.average_watts)} <span className="text-xs text-gray-500 font-normal">W</span></p>
+              {a.max_watts != null && (
+                <p className="text-[10px] text-gray-600 mt-0.5">Máx {Math.round(a.max_watts)} W</p>
+              )}
+            </div>
+          )}
+          {a.average_temp_c != null && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-[10px] text-gray-500 uppercase">Temperatura</p>
+              <p className="text-xl font-black text-cyan-400 mt-1">{Math.round(a.average_temp_c)}° <span className="text-xs text-gray-500 font-normal">C</span></p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Gráfico HR + altitud */}
       {chartData.length > 0 && (
@@ -250,6 +324,47 @@ export default function ActivityDetail() {
         </div>
       )}
 
+      {/* Gráfico de cadencia */}
+      {hasCadenceStream && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+          <h2 className="font-black text-sm mb-3">👟 Cadencia (spm)</h2>
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={chartData} margin={{ top: 10, right: 15, left: -10, bottom: 5 }}>
+              <CartesianGrid stroke="#1f2937" vertical={false} />
+              <XAxis
+                dataKey="km"
+                stroke="#6b7280"
+                fontSize={10}
+                tickFormatter={v => `${v}km`}
+                tickLine={false}
+                axisLine={{ stroke: '#1f2937' }}
+              />
+              <YAxis
+                stroke="#fb923c"
+                fontSize={10}
+                tickLine={false}
+                axisLine={false}
+                width={35}
+                domain={[140, 'dataMax + 10']}
+              />
+              <Tooltip
+                contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }}
+                labelStyle={{ color: '#94a3b8' }}
+                formatter={(value: any) => value == null ? ['—', 'Cadencia'] : [`${Math.round(value)} spm`, 'Cadencia']}
+                labelFormatter={(v: any) => `${v} km`}
+              />
+              <Line
+                type="monotone"
+                dataKey="cad"
+                stroke="#fb923c"
+                strokeWidth={2}
+                dot={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       {/* Splits */}
       {data.laps && data.laps.length > 0 && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -263,20 +378,32 @@ export default function ActivityDetail() {
                   <th className="text-right py-2 px-2">Tiempo</th>
                   <th className="text-right py-2 px-2">Ritmo</th>
                   <th className="text-right py-2 px-2">FC</th>
+                  <th className="text-right py-2 px-2">Cad</th>
+                  <th className="text-right py-2 px-2">Zancada</th>
                   <th className="text-right py-2 px-2">Desnivel</th>
                 </tr>
               </thead>
               <tbody>
-                {data.laps.map((lap, i) => (
-                  <tr key={i} className="border-b border-gray-800/60">
-                    <td className="py-2 px-2 text-gray-400">{lap.lap_index ?? i + 1}</td>
-                    <td className="py-2 px-2 text-right">{(lap.distance / 1000).toFixed(2)} km</td>
-                    <td className="py-2 px-2 text-right">{formatSeconds(lap.moving_time)}</td>
-                    <td className="py-2 px-2 text-right text-blue-400 font-semibold">{paceFromSpeed(lap.average_speed)} /km</td>
-                    <td className="py-2 px-2 text-right text-pink-400">{lap.average_heartrate ? Math.round(lap.average_heartrate) : '—'}</td>
-                    <td className="py-2 px-2 text-right text-green-400">+{Math.round(lap.total_elevation_gain || 0)} m</td>
-                  </tr>
-                ))}
+                {data.laps.map((lap, i) => {
+                  const cadSpm = lap.average_cadence != null
+                    ? (isRun ? lap.average_cadence * 2 : lap.average_cadence)
+                    : null
+                  const stride = (cadSpm && lap.average_speed)
+                    ? (lap.average_speed * 60) / cadSpm
+                    : null
+                  return (
+                    <tr key={i} className="border-b border-gray-800/60">
+                      <td className="py-2 px-2 text-gray-400">{lap.lap_index ?? i + 1}</td>
+                      <td className="py-2 px-2 text-right">{(lap.distance / 1000).toFixed(2)} km</td>
+                      <td className="py-2 px-2 text-right">{formatSeconds(lap.moving_time)}</td>
+                      <td className="py-2 px-2 text-right text-blue-400 font-semibold">{paceFromSpeed(lap.average_speed)} /km</td>
+                      <td className="py-2 px-2 text-right text-pink-400">{lap.average_heartrate ? Math.round(lap.average_heartrate) : '—'}</td>
+                      <td className="py-2 px-2 text-right text-orange-400">{cadSpm != null ? Math.round(cadSpm) : '—'}</td>
+                      <td className="py-2 px-2 text-right text-amber-400">{stride != null ? `${stride.toFixed(2)} m` : '—'}</td>
+                      <td className="py-2 px-2 text-right text-green-400">+{Math.round(lap.total_elevation_gain || 0)} m</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

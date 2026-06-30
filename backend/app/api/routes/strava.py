@@ -226,9 +226,29 @@ def get_activity_detail(
         detail.streams = streams
         detail.laps = full.get("laps") or []
         detail.segment_efforts = full.get("segment_efforts") or []
+        # El payload de detalle incluye campos extra (calories, description, device_name, gear_id…)
+        # que la lista de actividades no devuelve. Lo guardamos para usarlo abajo.
+        activity.raw_data = full
+        db.add(activity)
         db.add(detail)
         db.commit()
         db.refresh(detail)
+        db.refresh(activity)
+
+    # Strava devuelve muchos campos extra en raw_data y en el full fetch.
+    # Los exponemos sin tocar el schema. Para cadencia en carrera Strava devuelve
+    # revoluciones de una sola pierna por minuto: se duplica para obtener spm reales.
+    raw = activity.raw_data or {}
+    is_run = (activity.type or "").lower().startswith("run")
+    avg_cadence_raw = raw.get("average_cadence")
+    max_cadence_raw = raw.get("max_cadence")
+    avg_cadence_spm = (avg_cadence_raw * 2) if (avg_cadence_raw and is_run) else avg_cadence_raw
+    max_cadence_spm = (max_cadence_raw * 2) if (max_cadence_raw and is_run) else max_cadence_raw
+
+    # Zancada media (m) = velocidad media (m/s) * 60 / cadencia (pasos/min)
+    avg_stride_m = None
+    if avg_cadence_spm and activity.average_speed_ms:
+        avg_stride_m = round((activity.average_speed_ms * 60) / avg_cadence_spm, 2)
 
     return {
         "activity": {
@@ -245,6 +265,25 @@ def get_activity_detail(
             "average_speed_ms": activity.average_speed_ms,
             "max_speed_ms": activity.max_speed_ms,
             "start_date": activity.start_date,
+            # Extras derivados del payload completo
+            "average_cadence_spm": avg_cadence_spm,
+            "max_cadence_spm": max_cadence_spm,
+            "average_stride_m": avg_stride_m,
+            "calories": raw.get("calories"),
+            "suffer_score": raw.get("suffer_score"),
+            "relative_effort": raw.get("relative_effort") or raw.get("perceived_exertion"),
+            "average_temp_c": raw.get("average_temp"),
+            "average_watts": raw.get("average_watts"),
+            "max_watts": raw.get("max_watts"),
+            "weighted_average_watts": raw.get("weighted_average_watts"),
+            "kilojoules": raw.get("kilojoules"),
+            "device_name": raw.get("device_name"),
+            "gear_id": raw.get("gear_id"),
+            "pr_count": raw.get("pr_count"),
+            "achievement_count": raw.get("achievement_count"),
+            "kudos_count": raw.get("kudos_count"),
+            "description": raw.get("description"),
+            "is_run": is_run,
         },
         "streams": detail.streams or {},
         "laps": detail.laps or [],
