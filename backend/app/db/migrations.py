@@ -23,10 +23,20 @@ COLUMNS_TO_ADD = [
     ("goals", "hyrox_division", "VARCHAR"),
     ("goals", "notes", "TEXT"),
 
+    # Goal — triatlón
+    ("goals", "triathlon_distance", "VARCHAR"),     # sprint | olympic | half | ironman
+    ("goals", "target_swim_time_seconds", "INTEGER"),
+    ("goals", "target_bike_time_seconds", "INTEGER"),
+    ("goals", "target_run_time_seconds", "INTEGER"),
+
     # Workout — vinculación con plan/objetivo
     ("workouts", "goal_id", "INTEGER"),
     ("workouts", "week_index", "INTEGER"),
     ("workouts", "day_of_week", "INTEGER"),
+
+    # Workout — tracking de ediciones (Goggins respeta cambios manuales)
+    ("workouts", "modified_by", "VARCHAR"),         # 'ai' | 'user' | null
+    ("workouts", "updated_at", "TIMESTAMPTZ DEFAULT now()"),
 ]
 
 # (enum_type_name, [values]) — ALTER TYPE ADD VALUE IF NOT EXISTS
@@ -48,6 +58,13 @@ ENUM_VALUES_TO_ADD = [
             "strength_full",
             "cross_training",
             "rest",
+            # Triatlón / natación / ciclismo
+            "swim",
+            "bike",
+            "brick",
+            "transition",
+            "swim_technique",
+            "open_water",
         ],
     ),
 ]
