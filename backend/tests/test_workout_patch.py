@@ -66,3 +66,20 @@ def test_add_recurring_solo_dias_concretos_y_sin_duplicar(db, user):
         user, db,
     )
     assert out2["created"] == 0
+
+
+def test_recurring_se_asocia_al_objetivo_activo(db, user):
+    """Si no se pasa goal_id, los workouts deben asociarse al objetivo activo
+    para que aparezcan en la vista de Plan (regresión: movilidad invisible)."""
+    from app.models.goal import Goal, GoalType
+    from app.services.agent_tools import _tool_add_recurring_workout
+    g = Goal(user_id=user.id, type=GoalType.race, description="Tri", sport="triathlon", is_active=True)
+    db.add(g); db.commit(); db.refresh(g)
+
+    out = _tool_add_recurring_workout(
+        {"type": "mobility", "start_date": "2026-07-01", "end_date": "2026-07-03"},
+        user, db,
+    )
+    assert out["created"] == 3
+    rows = db.query(Workout).filter(Workout.type == WorkoutType.mobility).all()
+    assert all(r.goal_id == g.id for r in rows)

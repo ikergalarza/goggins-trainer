@@ -101,7 +101,9 @@ def list_plan_workouts(
     """Lista los workouts del plan (opcionalmente filtrados por objetivo)."""
     q = db.query(Workout).filter(Workout.user_id == user_id)
     if goal_id is not None:
-        q = q.filter(Workout.goal_id == goal_id)
+        # Incluye también los workouts sin objetivo asignado (p.ej. añadidos por
+        # Goggins sin goal_id), para que no queden "huérfanos" e invisibles.
+        q = q.filter((Workout.goal_id == goal_id) | (Workout.goal_id.is_(None)))
     workouts = q.order_by(Workout.date.asc()).all()
     return [_serialize_workout(w) for w in workouts]
 

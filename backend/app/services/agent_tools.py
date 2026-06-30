@@ -17,11 +17,27 @@ from sqlalchemy.orm import Session
 from app.models.user import User
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.strava_activity import StravaActivity
+from app.models.goal import Goal
 
 logger = logging.getLogger(__name__)
 
 
 VALID_TYPES = [t.value for t in WorkoutType]
+
+
+def _active_goal_id(user: User, db: Session):
+    """Objetivo activo más reciente del usuario (para asociar workouts nuevos).
+
+    Si los workouts que añade Goggins no llevan goal_id, no aparecen en la vista
+    de Plan (que filtra por objetivo). Por eso se asocian al objetivo activo.
+    """
+    g = (
+        db.query(Goal)
+        .filter(Goal.user_id == user.id, Goal.is_active.is_(True))
+        .order_by(Goal.created_at.desc())
+        .first()
+    )
+    return g.id if g else None
 VALID_STATUSES = [s.value for s in WorkoutStatus]
 
 
@@ -417,7 +433,7 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
 
     w = Workout(
         user_id=user.id,
-        goal_id=input.get("goal_id"),
+        goal_id=input.get("goal_id") or _active_goal_id(user, db),
         date=d,
         day_of_week=d.weekday(),
         type=WorkoutType(type_str),
@@ -739,7 +755,7 @@ def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
         return {"ok": False, "error": "Ninguna fecha coincide con los días indicados"}
 
     wtype = WorkoutType(type_str)
-    goal_id = input.get("goal_id")
+    goal_id = input.get("goal_id") or _active_goal_id(user, db)
     # No duplicar si ya hay un workout del mismo tipo ese día
     existing = {
         (w.date, w.type)
