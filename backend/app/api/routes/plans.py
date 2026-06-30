@@ -39,6 +39,7 @@ def _serialize_workout(w: Workout) -> dict:
         "notes": w.notes,
         "strava_activity_id": w.strava_activity_id,
         "ai_feedback": w.ai_feedback,
+        "modified_by": w.modified_by,
     }
 
 
@@ -142,6 +143,10 @@ def update_workout(workout_id: int, body: WorkoutUpdate, db: Session = Depends(g
             workout.day_of_week = new_date.weekday()
     for k, v in data.items():
         setattr(workout, k, v)
+
+    # Edición manual desde la app: marca el workout como modificado por el usuario
+    # para que Goggins respete los cambios y no los pise en regeneraciones.
+    workout.modified_by = "user"
 
     db.add(workout)
     db.commit()

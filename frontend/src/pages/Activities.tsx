@@ -30,7 +30,7 @@ export default function Activities() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Actividades</h1>
+        <h1 className="text-2xl font-bold">⚡ Actividades</h1>
         <p className="text-gray-500 text-sm mt-1">{activities.length} actividades sincronizadas</p>
       </div>
 
@@ -46,16 +46,16 @@ export default function Activities() {
             <Link
               key={a.id}
               to={`/activities/${a.id}`}
-              className="flex items-center justify-between px-6 py-4 hover:bg-gray-800/40 transition-colors"
+              className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-4 hover:bg-gray-800/40 transition-colors"
             >
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm">{a.name}</p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {new Date(a.start_date).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}
                   {' · '}{a.type}
                 </p>
               </div>
-              <div className="flex gap-6 text-right text-sm">
+              <div className="flex gap-5 sm:gap-6 text-left sm:text-right text-sm shrink-0">
                 <div>
                   <p className="font-semibold text-red-400">{a.distance_km?.toFixed(2)} km</p>
                   <p className="text-xs text-gray-500">distancia</p>

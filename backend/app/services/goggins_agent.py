@@ -41,6 +41,14 @@ REGLAS DE COACHING:
 - Si pregunta sobre técnica, fisiología o periodización, das respuesta correcta y específica — eres entrenador real, no solo motivación vacía.
 - Si pregunta algo fuera del entrenamiento (vida, mente, hábitos), respondes con la mentalidad Goggins: disciplina sobre motivación, accountability mirror, callus the mind.
 
+PROACTIVIDAD (analiza carga real vs plan):
+- COMPARA siempre lo realmente hecho (Strava, `last_14_days`) con lo planificado. Si lo ves desfasado, dilo y propón un ajuste concreto con una tool.
+- Si el atleta lleva varias sesiones por debajo del plan (volumen bajo, FC alta, saltos), sugiere BAJAR la carga de la próxima semana (`adjust_week_load` con factor < 1, p.ej. 0.85). Si va sobrado (cumple y con FC controlada), sugiere SUBIR (factor 1.1-1.15).
+- Cuando el atleta pregunte "¿puedo mejorar?", "¿cómo voy?", "¿voy bien?" → NO respondas con motivación vacía. Llama a `get_strava_summary` y/o `compare_planned_vs_actual`, lee los números y responde con datos: qué está bien, qué falla, y la acción concreta.
+- Cuando el atleta diga "no puedo entrenar esta semana / estos días", usa `shift_plan` para desplazar todo el plan futuro, no muevas workouts uno a uno.
+- Cuando diga "me veo flojo/cansado" o "me veo fuerte/sobrado", usa `adjust_week_load` sobre la semana en cuestión.
+- RESPETA los cambios manuales del atleta: en el contexto tienes `user_edited_workouts` (workouts con `modified_by='user'`). Esos los tocó él a mano — no los machaques sin avisar. Si tu ajuste los afecta, menciónalo y respeta su intención salvo que sea claramente contraproducente (y entonces explícale por qué).
+
 LONGITUD Y FORMATO (CRÍTICO):
 - BREVE por defecto: 2-4 frases. NUNCA más de 6 frases salvo que la pregunta exija explicación técnica detallada.
 - Saludos ("hola", "qué tal") → MÁX 2 frases. Una de impacto + una pregunta directa para arrancar la sesión.
@@ -63,6 +71,10 @@ Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Ú
 - `add_workout(date, type, ...)` — para añadir un entreno nuevo.
 - `mark_workout_status(workout_id, status)` — para marcar como completado o saltado.
 - `list_workouts(start_date, end_date)` — si necesitas buscar workouts fuera del contexto inicial.
+- `shift_plan(days|weeks, from_date)` — desplaza TODOS los workouts futuros del plan N días o semanas. Úsalo para "no puedo entrenar esta semana / estos días": muévelo todo de golpe en vez de uno a uno.
+- `adjust_week_load(week_start_date, factor)` — escala distancia y duración de los workouts de esa semana por un factor (0.8 = bajar 20%, 1.15 = subir 15%). Úsalo para "me veo flojo" (baja) o "me veo fuerte/sobrado" (sube).
+- `get_strava_summary(days)` — resumen agregado de lo realmente hecho en Strava (km, tiempo, sesiones, FC media por disciplina) en el periodo. Úsalo para responder con datos a "¿cómo voy?", "¿puedo mejorar?".
+- `compare_planned_vs_actual(start_date, end_date)` — compara lo planificado con lo realmente hecho en el rango. Úsalo para detectar desfases y justificar subir/bajar la carga.
 
 REGLAS DE TOOL USE:
 - Los workout_ids están en el contexto que te paso (campo `id` de cada workout en `upcoming_workouts`). Úsalos.
@@ -180,6 +192,7 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
     )
     upcoming_list = [
         {
+            "id": w.id,
             "date": w.date.isoformat(),
             "type": w.type.value if hasattr(w.type, "value") else w.type,
             "distance_km": w.planned_distance_km,
@@ -187,8 +200,25 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             "hr_zone": w.planned_heart_rate_zone,
             "instructions": w.instructions,
             "status": w.status.value if hasattr(w.status, "value") else w.status,
+            "modified_by": w.modified_by,
+            "updated_at": w.updated_at.isoformat() if w.updated_at else None,
         }
         for w in upcoming
+    ]
+
+    # Workouts editados manualmente por el atleta (modified_by='user') en los
+    # próximos 14 días → Goggins debe respetar/tener en cuenta estos cambios.
+    user_edited = [
+        {
+            "id": w["id"],
+            "date": w["date"],
+            "type": w["type"],
+            "distance_km": w["distance_km"],
+            "duration_min": w["duration_min"],
+            "updated_at": w["updated_at"],
+        }
+        for w in upcoming_list
+        if w.get("modified_by") == "user"
     ]
 
     # Último análisis IA cacheado
@@ -215,6 +245,7 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             "activities": recent_acts,
         },
         "upcoming_workouts": upcoming_list,
+        "user_edited_workouts": user_edited,
         "fitness_snapshot": fitness_snapshot,
     }
 
@@ -292,7 +323,7 @@ def chat_stream(
 
             with client.messages.stream(
                 model=ai_client.DEFAULT_MODEL,
-                max_tokens=600,
+                max_tokens=2500,
                 temperature=0.85,
                 system=full_system,
                 tools=agent_tools.TOOLS,

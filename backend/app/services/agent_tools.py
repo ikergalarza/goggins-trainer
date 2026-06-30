@@ -8,13 +8,15 @@ El executor SIEMPRE valida que el workout pertenece al usuario activo
 antes de modificarlo. Devuelve dicts serializables.
 """
 import logging
-from datetime import date, timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
+from app.models.strava_activity import StravaActivity
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +145,103 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["workout_id", "status"],
         },
     },
+    {
+        "name": "shift_plan",
+        "description": (
+            "Desplaza TODOS los workouts futuros del plan N días o semanas. "
+            "Úsalo cuando el atleta no pueda entrenar un periodo (p.ej. 'no puedo "
+            "entrenar esta semana', 'me voy de viaje 3 días') y haya que correr "
+            "todo el plan hacia adelante en bloque, en vez de mover entrenos uno "
+            "a uno. Pasa 'days' O 'weeks' (uno de los dos)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Nº de días a desplazar (positivo = hacia adelante). Alternativa a 'weeks'.",
+                },
+                "weeks": {
+                    "type": "integer",
+                    "description": "Nº de semanas a desplazar (positivo = hacia adelante). Alternativa a 'days'.",
+                },
+                "from_date": {
+                    "type": "string",
+                    "description": (
+                        "Fecha inclusiva desde la que desplazar (YYYY-MM-DD). "
+                        "Por defecto hoy: solo se mueven los workouts en o posteriores a esa fecha."
+                    ),
+                },
+            },
+        },
+    },
+    {
+        "name": "adjust_week_load",
+        "description": (
+            "Escala la distancia y la duración planificadas de TODOS los workouts "
+            "de una semana por un factor. Úsalo para subir o bajar la carga: "
+            "0.8 = bajar 20% ('me veo flojo/cansado'), 1.15 = subir 15% ('me veo "
+            "fuerte/sobrado'). No toca los workouts de descanso."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "week_start_date": {
+                    "type": "string",
+                    "description": (
+                        "Fecha de inicio de la semana a ajustar (YYYY-MM-DD). Se "
+                        "ajustan los 7 días desde esa fecha inclusive."
+                    ),
+                },
+                "factor": {
+                    "type": "number",
+                    "description": "Factor multiplicador (>0). 0.8 baja 20%, 1.15 sube 15%.",
+                },
+            },
+            "required": ["week_start_date", "factor"],
+        },
+    },
+    {
+        "name": "get_strava_summary",
+        "description": (
+            "Devuelve un resumen agregado de lo realmente hecho en Strava en los "
+            "últimos N días: km totales, tiempo, nº de sesiones y FC media, "
+            "desglosado por disciplina (Run, Ride, Swim...). Úsalo para responder "
+            "con datos reales a '¿cómo voy?', '¿puedo mejorar?'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Ventana en días hacia atrás desde hoy. Por defecto 14.",
+                },
+            },
+        },
+    },
+    {
+        "name": "compare_planned_vs_actual",
+        "description": (
+            "Compara lo planificado con lo realmente hecho (Strava) en un rango de "
+            "fechas. Devuelve km y duración planificados vs reales, y el ratio de "
+            "cumplimiento. Úsalo para detectar desfases y justificar subir o bajar "
+            "la carga."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {
+                    "type": "string",
+                    "description": "Fecha de inicio inclusiva (YYYY-MM-DD).",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "Fecha de fin inclusiva (YYYY-MM-DD).",
+                },
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
 ]
 
 
@@ -208,6 +307,7 @@ def _tool_move_workout(input: dict, user: User, db: Session) -> dict:
     old_date = w.date.isoformat() if w.date else None
     w.date = new_date
     w.day_of_week = new_date.weekday()
+    w.modified_by = "user"
     db.add(w)
     db.commit()
     db.refresh(w)
@@ -246,6 +346,7 @@ def _tool_update_workout(input: dict, user: User, db: Session) -> dict:
         w.instructions = input["instructions"]
         changes["instructions"] = w.instructions
 
+    w.modified_by = "user"
     db.add(w)
     db.commit()
     db.refresh(w)
@@ -294,6 +395,7 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         planned_duration_min=input.get("duration_min"),
         planned_heart_rate_zone=input.get("hr_zone"),
         instructions=input.get("instructions"),
+        modified_by="user",
     )
     db.add(w)
     db.commit()
@@ -315,6 +417,7 @@ def _tool_mark_workout_status(input: dict, user: User, db: Session) -> dict:
         w.status = WorkoutStatus(input["status"])
     except ValueError:
         return {"ok": False, "error": f"Status inválido: {input['status']}"}
+    w.modified_by = "user"
     db.add(w)
     db.commit()
     db.refresh(w)
@@ -327,6 +430,249 @@ def _tool_mark_workout_status(input: dict, user: User, db: Session) -> dict:
     }
 
 
+def _tool_shift_plan(input: dict, user: User, db: Session) -> dict:
+    days = input.get("days")
+    weeks = input.get("weeks")
+    if days is None and weeks is None:
+        return {"ok": False, "error": "Indica 'days' o 'weeks'"}
+    delta_days = int(days) if days is not None else 0
+    if weeks is not None:
+        delta_days += int(weeks) * 7
+    if delta_days == 0:
+        return {"ok": False, "error": "El desplazamiento no puede ser 0"}
+
+    from_date = _parse_date(input["from_date"]) if input.get("from_date") else date.today()
+    workouts = (
+        db.query(Workout)
+        .filter(Workout.user_id == user.id, Workout.date >= from_date)
+        .order_by(Workout.date.asc())
+        .all()
+    )
+    shift = timedelta(days=delta_days)
+    for w in workouts:
+        w.date = w.date + shift
+        w.day_of_week = w.date.weekday()
+        w.modified_by = "user"
+        db.add(w)
+    db.commit()
+    return {
+        "ok": True,
+        "mutation": "shift_plan",
+        "shifted_count": len(workouts),
+        "shift_days": delta_days,
+        "from_date": from_date.isoformat(),
+        "summary": (
+            f"Desplazados {len(workouts)} workouts {delta_days} días "
+            f"desde {from_date.isoformat()}"
+        ),
+    }
+
+
+def _tool_adjust_week_load(input: dict, user: User, db: Session) -> dict:
+    try:
+        factor = float(input["factor"])
+    except (KeyError, TypeError, ValueError):
+        return {"ok": False, "error": "Factor inválido"}
+    if factor <= 0:
+        return {"ok": False, "error": "El factor debe ser > 0"}
+
+    try:
+        week_start = _parse_date(input["week_start_date"])
+    except Exception as e:
+        return {"ok": False, "error": f"Fecha inválida: {e}"}
+    week_end = week_start + timedelta(days=6)
+
+    workouts = (
+        db.query(Workout)
+        .filter(
+            Workout.user_id == user.id,
+            Workout.date >= week_start,
+            Workout.date <= week_end,
+        )
+        .order_by(Workout.date.asc())
+        .all()
+    )
+    adjusted = 0
+    for w in workouts:
+        if w.type == WorkoutType.rest:
+            continue
+        touched = False
+        if w.planned_distance_km is not None:
+            w.planned_distance_km = round(w.planned_distance_km * factor, 2)
+            touched = True
+        if w.planned_duration_min is not None:
+            w.planned_duration_min = max(1, round(w.planned_duration_min * factor))
+            touched = True
+        if touched:
+            w.modified_by = "user"
+            db.add(w)
+            adjusted += 1
+    db.commit()
+    pct = round((factor - 1) * 100)
+    return {
+        "ok": True,
+        "mutation": "adjust_week_load",
+        "adjusted_count": adjusted,
+        "factor": factor,
+        "week_start_date": week_start.isoformat(),
+        "summary": (
+            f"Ajustada la carga de {adjusted} workouts de la semana del "
+            f"{week_start.isoformat()} ({'+' if pct >= 0 else ''}{pct}%)"
+        ),
+    }
+
+
+def _activity_dt(a: StravaActivity) -> datetime | None:
+    if not a.start_date:
+        return None
+    if isinstance(a.start_date, datetime):
+        return a.start_date
+    try:
+        return datetime.fromisoformat(str(a.start_date).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _tool_get_strava_summary(input: dict, user: User, db: Session) -> dict:
+    days = int(input.get("days") or 14)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    activities = (
+        db.query(StravaActivity)
+        .filter(StravaActivity.user_id == user.id)
+        .order_by(StravaActivity.start_date.desc())
+        .limit(200)
+        .all()
+    )
+
+    by_disc: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"sessions": 0, "km": 0.0, "min": 0.0, "_hr_sum": 0.0, "_hr_n": 0}
+    )
+    total_km = 0.0
+    total_min = 0.0
+    total_sessions = 0
+    for a in activities:
+        dt = _activity_dt(a)
+        if not dt or dt < since:
+            continue
+        disc = a.type or "Other"
+        km = (a.distance_m or 0) / 1000
+        mins = (a.moving_time_s or 0) / 60
+        d = by_disc[disc]
+        d["sessions"] += 1
+        d["km"] += km
+        d["min"] += mins
+        if a.average_heartrate:
+            d["_hr_sum"] += a.average_heartrate
+            d["_hr_n"] += 1
+        total_km += km
+        total_min += mins
+        total_sessions += 1
+
+    per_discipline = {}
+    for disc, d in by_disc.items():
+        per_discipline[disc] = {
+            "sessions": int(d["sessions"]),
+            "km": round(d["km"], 1),
+            "min": round(d["min"], 1),
+            "avg_hr": round(d["_hr_sum"] / d["_hr_n"]) if d["_hr_n"] else None,
+        }
+
+    return {
+        "ok": True,
+        "days": days,
+        "totals": {
+            "sessions": total_sessions,
+            "km": round(total_km, 1),
+            "min": round(total_min, 1),
+        },
+        "by_discipline": per_discipline,
+        "summary": (
+            f"{total_sessions} sesiones, {round(total_km, 1)} km en {days} días"
+        ),
+    }
+
+
+def _tool_compare_planned_vs_actual(input: dict, user: User, db: Session) -> dict:
+    try:
+        start = _parse_date(input["start_date"])
+        end = _parse_date(input["end_date"])
+    except Exception as e:
+        return {"ok": False, "error": f"Fecha inválida: {e}"}
+
+    workouts = (
+        db.query(Workout)
+        .filter(
+            Workout.user_id == user.id,
+            Workout.date >= start,
+            Workout.date <= end,
+        )
+        .all()
+    )
+    planned_km = 0.0
+    planned_min = 0.0
+    planned_count = 0
+    completed_count = 0
+    skipped_count = 0
+    for w in workouts:
+        if w.type == WorkoutType.rest:
+            continue
+        planned_count += 1
+        planned_km += w.planned_distance_km or 0
+        planned_min += w.planned_duration_min or 0
+        if w.status == WorkoutStatus.completed:
+            completed_count += 1
+        elif w.status == WorkoutStatus.skipped:
+            skipped_count += 1
+
+    # Real: actividades de Strava dentro del rango (límites de día completos)
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    end_dt = datetime(end.year, end.month, end.day, tzinfo=timezone.utc) + timedelta(days=1)
+    activities = (
+        db.query(StravaActivity)
+        .filter(StravaActivity.user_id == user.id)
+        .order_by(StravaActivity.start_date.desc())
+        .limit(200)
+        .all()
+    )
+    actual_km = 0.0
+    actual_min = 0.0
+    actual_count = 0
+    for a in activities:
+        dt = _activity_dt(a)
+        if not dt or dt < start_dt or dt >= end_dt:
+            continue
+        actual_km += (a.distance_m or 0) / 1000
+        actual_min += (a.moving_time_s or 0) / 60
+        actual_count += 1
+
+    km_ratio = round(actual_km / planned_km, 2) if planned_km else None
+    min_ratio = round(actual_min / planned_min, 2) if planned_min else None
+
+    return {
+        "ok": True,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "planned": {
+            "workouts": planned_count,
+            "km": round(planned_km, 1),
+            "min": round(planned_min, 1),
+            "completed": completed_count,
+            "skipped": skipped_count,
+        },
+        "actual": {
+            "sessions": actual_count,
+            "km": round(actual_km, 1),
+            "min": round(actual_min, 1),
+        },
+        "km_completion_ratio": km_ratio,
+        "duration_completion_ratio": min_ratio,
+        "summary": (
+            f"Plan: {round(planned_km, 1)} km / Real: {round(actual_km, 1)} km "
+            f"(ratio {km_ratio if km_ratio is not None else 'n/a'})"
+        ),
+    }
+
+
 _DISPATCH = {
     "list_workouts": _tool_list_workouts,
     "move_workout": _tool_move_workout,
@@ -334,6 +680,10 @@ _DISPATCH = {
     "delete_workout": _tool_delete_workout,
     "add_workout": _tool_add_workout,
     "mark_workout_status": _tool_mark_workout_status,
+    "shift_plan": _tool_shift_plan,
+    "adjust_week_load": _tool_adjust_week_load,
+    "get_strava_summary": _tool_get_strava_summary,
+    "compare_planned_vs_actual": _tool_compare_planned_vs_actual,
 }
 
 

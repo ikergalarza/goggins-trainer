@@ -1,7 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
 import api from '../api'
+import WorkoutCard from '../components/WorkoutCard'
+import {
+  TYPE_LABELS,
+  STATUS_LABELS,
+  disciplineOf,
+  themeOf,
+  parseIntervals,
+  DISCIPLINE_ICONS,
+  DISCIPLINE_LABELS,
+  DISCIPLINE_THEME,
+  type Discipline,
+} from '../components/workoutMeta'
+import { parseLocalDate, formatDayKey, startOfWeek } from '../lib/date'
 
 const USER_ID = 1
+
+// Disciplinas mostradas en la leyenda (orden lógico de un triatlón + fuerza/descanso).
+const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'strength', 'rest']
 
 interface Goal {
   id: number
@@ -32,53 +48,11 @@ interface Workout {
   strava_activity_id: string | null
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  easy_run: 'Suave',
-  tempo: 'Tempo',
-  intervals: 'Series',
-  long_run: 'Tirada larga',
-  recovery: 'Recuperación',
-  fartlek: 'Fartlek',
-  hill_repeats: 'Cuestas',
-  hyrox_sim: 'Sim Hyrox',
-  hyrox_stations: 'Estaciones',
-  strength_upper: 'Fuerza tren sup',
-  strength_lower: 'Fuerza tren inf',
-  strength_full: 'Fuerza full body',
-  cross_training: 'Cross-training',
-  rest: 'Descanso',
-}
-
-const TYPE_COLORS: Record<string, string> = {
-  easy_run: 'bg-green-900/40 border-green-700/40 text-green-300',
-  tempo: 'bg-yellow-900/40 border-yellow-700/40 text-yellow-300',
-  intervals: 'bg-red-900/40 border-red-700/40 text-red-300',
-  long_run: 'bg-blue-900/40 border-blue-700/40 text-blue-300',
-  recovery: 'bg-cyan-900/40 border-cyan-700/40 text-cyan-300',
-  fartlek: 'bg-orange-900/40 border-orange-700/40 text-orange-300',
-  hill_repeats: 'bg-rose-900/40 border-rose-700/40 text-rose-300',
-  hyrox_sim: 'bg-purple-900/40 border-purple-700/40 text-purple-300',
-  hyrox_stations: 'bg-fuchsia-900/40 border-fuchsia-700/40 text-fuchsia-300',
-  strength_upper: 'bg-amber-900/40 border-amber-700/40 text-amber-300',
-  strength_lower: 'bg-amber-900/40 border-amber-700/40 text-amber-300',
-  strength_full: 'bg-amber-900/40 border-amber-700/40 text-amber-300',
-  cross_training: 'bg-teal-900/40 border-teal-700/40 text-teal-300',
-  rest: 'bg-gray-800/60 border-gray-700/40 text-gray-400',
-}
-
 const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 
-function formatDayKey(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
-function startOfWeek(d: Date): Date {
-  const out = new Date(d)
-  const day = (out.getDay() + 6) % 7 // 0 = lunes
-  out.setDate(out.getDate() - day)
-  out.setHours(0, 0, 0, 0)
-  return out
-}
+// Los helpers de fecha (parseLocalDate / formatDayKey / startOfWeek) viven en
+// ../lib/date para poder testearlos de forma aislada. Ver la nota sobre el bug
+// de zona horaria allí.
 
 export default function Plan() {
   const [goals, setGoals] = useState<Goal[]>([])
@@ -262,7 +236,8 @@ export default function Plan() {
     const map = new Map<string, Workout[]>()
     for (const w of workouts) {
       if (!w.date) continue
-      const d = new Date(w.date)
+      // Parse LOCAL para que el lunes de la semana sea correcto (ver parseLocalDate)
+      const d = parseLocalDate(w.date)
       const monday = startOfWeek(d)
       const key = formatDayKey(monday)
       const arr = map.get(key) || []
@@ -302,6 +277,19 @@ export default function Plan() {
 
       {msg && !generating && (
         <p className={`text-sm ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</p>
+      )}
+
+      {/* Leyenda de disciplinas (código de color) */}
+      {weeks.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-400">
+          {LEGEND_DISCIPLINES.map(d => (
+            <span key={d} className="flex items-center gap-1.5">
+              <span className={`inline-block w-2.5 h-2.5 rounded-full ${DISCIPLINE_THEME[d].dot}`} />
+              <span className="opacity-80">{DISCIPLINE_ICONS[d]}</span>
+              {DISCIPLINE_LABELS[d]}
+            </span>
+          ))}
+        </div>
       )}
 
       {/* Barra de progreso de generación */}
@@ -369,23 +357,45 @@ export default function Plan() {
       {weeks.length > 0 && (
         <div className="space-y-4">
           {weeks.map((wk, idx) => {
-            const monday = new Date(wk.weekStart)
+            // wk.weekStart es 'YYYY-MM-DD'; parsear LOCAL para no desfasar el día
+            const monday = parseLocalDate(wk.weekStart)
             return (
               <div key={wk.weekStart} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
                   <h3 className="text-sm font-bold text-gray-300">
                     Semana {idx + 1}
                     <span className="text-gray-600 font-normal ml-2">
                       {monday.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
                     </span>
                   </h3>
-                  <span className="text-xs text-gray-500">
-                    {wk.items
-                      .filter(w => w.planned_distance_km)
-                      .reduce((s, w) => s + (w.planned_distance_km || 0), 0)
-                      .toFixed(1)}{' '}
-                    km
-                  </span>
+                  <div className="flex items-center gap-2 text-xs">
+                    {/* Desglose de km por disciplina */}
+                    {(() => {
+                      const byDisc = new Map<Discipline, number>()
+                      for (const w of wk.items) {
+                        if (!w.planned_distance_km) continue
+                        const d = disciplineOf(w.type)
+                        byDisc.set(d, (byDisc.get(d) || 0) + w.planned_distance_km)
+                      }
+                      const total = Array.from(byDisc.values()).reduce((s, v) => s + v, 0)
+                      return (
+                        <>
+                          {LEGEND_DISCIPLINES.filter(d => byDisc.has(d)).map(d => (
+                            <span
+                              key={d}
+                              className={`px-1.5 py-0.5 rounded font-semibold ${DISCIPLINE_THEME[d].chipBg}`}
+                              title={DISCIPLINE_LABELS[d]}
+                            >
+                              {DISCIPLINE_ICONS[d]} {(byDisc.get(d) || 0).toFixed(1)}
+                            </span>
+                          ))}
+                          {total > 0 && (
+                            <span className="text-gray-400 font-bold">{total.toFixed(1)} km</span>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </div>
                 </div>
                 <div className="grid grid-cols-7 gap-2">
                   {DAY_NAMES.map((dn, i) => {
@@ -424,9 +434,11 @@ export default function Plan() {
                         </div>
                         <div className="space-y-1">
                           {workoutsToday.map(w => (
-                            <button
+                            <WorkoutCard
                               key={w.id}
-                              draggable
+                              workout={w}
+                              isDragging={draggingId === w.id}
+                              onClick={() => setSelectedWorkout(w)}
                               onDragStart={e => {
                                 setDraggingId(w.id)
                                 e.dataTransfer.effectAllowed = 'move'
@@ -437,21 +449,7 @@ export default function Plan() {
                                 setDraggingId(null)
                                 setDragOverKey(null)
                               }}
-                              onClick={() => setSelectedWorkout(w)}
-                              className={`block w-full text-left text-[10px] rounded border px-1.5 py-1 cursor-grab active:cursor-grabbing ${
-                                TYPE_COLORS[w.type] || 'bg-gray-800 border-gray-700 text-gray-300'
-                              } ${w.status === 'completed' ? 'ring-1 ring-green-500/60' : ''} ${
-                                draggingId === w.id ? 'opacity-40' : ''
-                              }`}
-                            >
-                              <div className="font-bold truncate">{TYPE_LABELS[w.type] || w.type}</div>
-                              {w.planned_distance_km && (
-                                <div className="opacity-80">{w.planned_distance_km} km</div>
-                              )}
-                              {!w.planned_distance_km && w.planned_duration_min && (
-                                <div className="opacity-80">{w.planned_duration_min}'</div>
-                              )}
-                            </button>
+                            />
                           ))}
                         </div>
                       </div>
@@ -474,24 +472,49 @@ export default function Plan() {
             className="bg-gray-900 border border-gray-800 rounded-xl p-6 max-w-md w-full space-y-4"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-black">{TYPE_LABELS[selectedWorkout.type] || selectedWorkout.type}</h3>
-                <p className="text-xs text-gray-500">
-                  {new Date(selectedWorkout.date).toLocaleDateString('es-ES', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'long',
-                  })}
-                </p>
-              </div>
-              <button
-                onClick={() => setSelectedWorkout(null)}
-                className="text-gray-500 hover:text-white text-xl leading-none"
-              >
-                ×
-              </button>
-            </div>
+            {(() => {
+              const theme = themeOf(selectedWorkout.type)
+              const disc = disciplineOf(selectedWorkout.type)
+              return (
+                <div className={`flex items-start justify-between border-l-4 ${theme.accentBorder} -ml-6 pl-5`}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{DISCIPLINE_ICONS[disc]}</span>
+                      <h3 className="text-lg font-black">{TYPE_LABELS[selectedWorkout.type] || selectedWorkout.type}</h3>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${theme.chipBg}`}>
+                        {DISCIPLINE_LABELS[disc]}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                          selectedWorkout.status === 'completed'
+                            ? 'bg-green-500/15 text-green-300'
+                            : selectedWorkout.status === 'skipped'
+                              ? 'bg-gray-500/20 text-gray-400'
+                              : 'bg-red-500/15 text-red-300'
+                        }`}
+                      >
+                        {STATUS_LABELS[selectedWorkout.status] || selectedWorkout.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1.5 capitalize">
+                      {parseLocalDate(selectedWorkout.date).toLocaleDateString('es-ES', {
+                        weekday: 'long',
+                        day: 'numeric',
+                        month: 'long',
+                      })}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedWorkout(null)}
+                    className="text-gray-500 hover:text-white text-xl leading-none"
+                  >
+                    ×
+                  </button>
+                </div>
+              )
+            })()}
 
             <div className="grid grid-cols-3 gap-2 text-center">
               {selectedWorkout.planned_distance_km != null && (
@@ -514,12 +537,41 @@ export default function Plan() {
               )}
             </div>
 
-            {selectedWorkout.instructions && (
-              <div>
-                <p className="text-xs text-gray-500 uppercase mb-1">Instrucciones</p>
-                <p className="text-sm text-gray-300 whitespace-pre-wrap">{selectedWorkout.instructions}</p>
-              </div>
-            )}
+            {selectedWorkout.instructions && (() => {
+              const sets = parseIntervals(selectedWorkout.instructions)
+              return (
+                <div className="space-y-2">
+                  {sets.length > 0 && (
+                    <div>
+                      <p className="text-xs text-gray-500 uppercase mb-1.5">Series</p>
+                      <div className="space-y-1.5">
+                        {sets.map((s, i) => (
+                          <div
+                            key={i}
+                            className="flex items-center gap-2 bg-black/30 border border-gray-800 rounded-lg px-3 py-2"
+                          >
+                            <span className="text-red-400 font-black text-sm shrink-0">{s.reps}×</span>
+                            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+                              <span className="font-bold text-gray-100">{s.distance}</span>
+                              {s.zone && (
+                                <span className="text-xs font-semibold text-red-300">@ {s.zone}</span>
+                              )}
+                              {s.rest && (
+                                <span className="text-xs text-gray-500">rec {s.rest}</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-gray-500 uppercase mb-1">Instrucciones</p>
+                    <p className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">{selectedWorkout.instructions}</p>
+                  </div>
+                </div>
+              )
+            })()}
 
             {selectedWorkout.actual_distance_km != null && (
               <div className="bg-green-900/20 border border-green-900/40 rounded-lg p-3">
@@ -537,9 +589,9 @@ export default function Plan() {
                 onChange={e => updateWorkout(selectedWorkout.id, { status: e.target.value })}
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
               >
-                <option value="planned">Planificado</option>
-                <option value="completed">Completado</option>
-                <option value="skipped">Saltado</option>
+                <option value="planned">{STATUS_LABELS.planned}</option>
+                <option value="completed">{STATUS_LABELS.completed}</option>
+                <option value="skipped">{STATUS_LABELS.skipped}</option>
               </select>
               <button
                 onClick={async () => {

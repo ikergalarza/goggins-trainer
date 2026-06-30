@@ -6,7 +6,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = "claude-opus-4-8"
 FAST_MODEL = "claude-haiku-4-5-20251001"
 
 _client: Optional[Anthropic] = None

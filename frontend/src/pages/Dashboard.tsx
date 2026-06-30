@@ -100,15 +100,15 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-black tracking-tight">
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">
             ⚡ Dashboard
           </h1>
           <p className="text-gray-500 text-sm mt-1">No excuses. No days off.</p>
         </div>
         {stravaConnected ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => handleSync(false)}
               disabled={syncing}
@@ -147,8 +147,8 @@ export default function Dashboard() {
       </div>
 
       {/* Gráficas volumen semanal */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-5">
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
           <h2 className="font-black text-lg">📊 Volumen semanal</h2>
           <div className="flex gap-1">
             {[6, 12, 26, 52].map(n => (
@@ -203,8 +203,8 @@ export default function Dashboard() {
       </div>
 
       {/* Análisis IA */}
-      <div className="bg-gradient-to-br from-gray-900 to-gray-900/60 border border-red-900/30 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-gradient-to-br from-gray-900 to-gray-900/60 border border-red-900/30 rounded-xl p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <div>
             <h2 className="font-black text-lg">🧠 Análisis IA del estado físico</h2>
             {insight?.created_at && (
@@ -301,7 +301,7 @@ export default function Dashboard() {
       </div>
 
       {/* Zonas cardíacas */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-6">
         <h2 className="font-black text-lg mb-5">❤️ Zonas Cardíacas</h2>
         {profile?.hr_zones ? (
           <div className="space-y-3">
@@ -313,9 +313,9 @@ export default function Dashboard() {
               if (!range) return null
               const pace = profile.target_paces?.[z.zone]
               return (
-                <div key={z.zone} className="flex items-center gap-3">
+                <div key={z.zone} className="flex items-center gap-2 sm:gap-3 flex-wrap">
                   <span className="text-xs font-black text-gray-500 w-6">{z.zone}</span>
-                  <span className="text-sm text-gray-400 w-28">{z.label}</span>
+                  <span className="text-sm text-gray-400 w-24 sm:w-28">{z.label}</span>
                   <span className="text-sm text-gray-300 font-semibold w-24">{range[0]}–{range[1]} bpm</span>
                   {pace && <span className="text-xs text-gray-500">{pace.pace_fast}–{pace.pace_slow} /km</span>}
                 </div>
@@ -343,7 +343,7 @@ export default function Dashboard() {
       </div>
 
       {/* Últimas actividades */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-6">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-black text-lg">🏃 Últimas Actividades</h2>
           <Link to="/activities" className="text-sm text-red-400 hover:underline font-medium">Ver todas →</Link>

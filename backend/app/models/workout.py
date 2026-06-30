@@ -26,6 +26,13 @@ class WorkoutType(str, enum.Enum):
     strength_lower = "strength_lower"
     strength_full = "strength_full"
     cross_training = "cross_training"
+    # Triatlón / natación / ciclismo
+    swim = "swim"                        # sesión de natación (piscina)
+    bike = "bike"                        # salida de ciclismo
+    brick = "brick"                      # entreno combinado (bici + carrera)
+    transition = "transition"            # práctica de transiciones (T1/T2)
+    swim_technique = "swim_technique"    # técnica de natación / drills
+    open_water = "open_water"            # natación en aguas abiertas
     # Otros
     rest = "rest"
 
@@ -64,4 +71,13 @@ class Workout(Base):
     # Análisis de Claude post-entreno
     ai_feedback = Column(Text, nullable=True)
 
+    # Quién editó por última vez este entreno: 'ai' | 'user' (null = sin editar
+    # tras la generación inicial). Permite a Goggins respetar los cambios manuales.
+    modified_by = Column(String, nullable=True, default=None)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

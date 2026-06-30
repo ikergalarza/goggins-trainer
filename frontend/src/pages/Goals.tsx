@@ -13,16 +13,25 @@ interface Goal {
   target_time_seconds: number | null
   hyrox_division: string | null
   target_weekly_km: number | null
+  triathlon_distance: string | null
   notes: string | null
   is_active: boolean
 }
 
 const TYPES = [
   { value: 'race', label: 'Carrera (running)' },
+  { value: 'triathlon', label: 'Triatlón' },
   { value: 'hyrox', label: 'Hyrox' },
   { value: 'weekly_km', label: 'Volumen semanal' },
   { value: 'fitness', label: 'Forma general' },
   { value: 'custom', label: 'Otro' },
+]
+
+const TRIATHLON_DISTANCES = [
+  { value: 'sprint', label: 'Sprint' },
+  { value: 'olympic', label: 'Olímpico' },
+  { value: 'half', label: 'Half (70.3)' },
+  { value: 'ironman', label: 'Ironman' },
 ]
 
 function formatSeconds(total: number | null): string {
@@ -55,6 +64,7 @@ export default function Goals() {
   const [raceDate, setRaceDate] = useState('')
   const [timeStr, setTimeStr] = useState('')
   const [hyroxDivision, setHyroxDivision] = useState('open')
+  const [triathlonDistance, setTriathlonDistance] = useState('olympic')
   const [weeklyKm, setWeeklyKm] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
@@ -92,6 +102,11 @@ export default function Goals() {
         payload.target_race_distance_km = distance ? parseFloat(distance) : null
         payload.target_race_date = raceDate || null
         payload.target_time_seconds = parseTimeString(timeStr)
+      } else if (type === 'triathlon') {
+        payload.sport = 'triathlon'
+        payload.target_race_date = raceDate || null
+        payload.triathlon_distance = triathlonDistance
+        payload.target_time_seconds = parseTimeString(timeStr)
       } else if (type === 'hyrox') {
         payload.sport = 'hyrox'
         payload.target_race_date = raceDate || null
@@ -121,6 +136,10 @@ export default function Goals() {
     if (g.type === 'race') {
       return `${g.target_race_distance_km}km en ${formatSeconds(g.target_time_seconds)}`
     }
+    if (g.type === 'triathlon') {
+      const distLabel = TRIATHLON_DISTANCES.find(d => d.value === g.triathlon_distance)?.label || g.triathlon_distance || 'Olímpico'
+      return `Triatlón ${distLabel}${g.target_time_seconds ? ` en ${formatSeconds(g.target_time_seconds)}` : ''}`
+    }
     if (g.type === 'hyrox') {
       return `Hyrox ${g.hyrox_division || 'open'}${g.target_time_seconds ? ` en ${formatSeconds(g.target_time_seconds)}` : ''}`
     }
@@ -146,7 +165,7 @@ export default function Goals() {
       </div>
 
       {showForm && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-6 space-y-4">
           <div>
             <label className="block text-xs text-gray-400 mb-1">Tipo</label>
             <select value={type} onChange={e => setType(e.target.value)} className={input}>
@@ -161,7 +180,7 @@ export default function Goals() {
 
           {type === 'race' && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Distancia (km)</label>
                   <input type="number" step="0.1" value={distance} onChange={e => setDistance(e.target.value)} placeholder="21.1" className={input} />
@@ -178,9 +197,30 @@ export default function Goals() {
             </>
           )}
 
+          {type === 'triathlon' && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Distancia</label>
+                  <select value={triathlonDistance} onChange={e => setTriathlonDistance(e.target.value)} className={input}>
+                    {TRIATHLON_DISTANCES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Fecha de la carrera</label>
+                  <input type="date" value={raceDate} onChange={e => setRaceDate(e.target.value)} className={input} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">Tiempo objetivo (hh:mm:ss o mm:ss)</label>
+                <input type="text" value={timeStr} onChange={e => setTimeStr(e.target.value)} placeholder="2:30:00" className={input} />
+              </div>
+            </>
+          )}
+
           {type === 'hyrox' && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">División</label>
                   <select value={hyroxDivision} onChange={e => setHyroxDivision(e.target.value)} className={input}>
@@ -233,9 +273,9 @@ export default function Goals() {
       ) : (
         <div className="space-y-3">
           {goals.map(g => (
-            <div key={g.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
+            <div key={g.id} className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-5 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-xs font-black text-red-400 uppercase">{g.type}</span>
                   {g.sport && <span className="text-xs text-gray-500">· {g.sport}</span>}
                   {g.target_race_date && (
@@ -257,4 +297,4 @@ export default function Goals() {
   )
 }
 
-const input = "w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-red-500"
+const input = "w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-base sm:text-sm text-gray-100 focus:outline-none focus:border-red-500"

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   ComposedChart,
   Bar,
@@ -10,6 +11,19 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
+
+// Detecta pantallas estrechas para ajustar la densidad del gráfico en móvil.
+function useIsNarrow(breakpoint = 640) {
+  const [narrow, setNarrow] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < breakpoint : false
+  )
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < breakpoint)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [breakpoint])
+  return narrow
+}
 
 interface WeekPoint {
   label: string
@@ -52,9 +66,17 @@ export default function WeeklyChart({
   height = 320,
   title,
 }: Props) {
+  const isNarrow = useIsNarrow()
+
   if (data.length === 0) {
     return <p className="text-sm text-gray-600">Sin datos.</p>
   }
+
+  // En móvil reducimos altura y aligeramos las etiquetas del eje X para que sea legible.
+  const effectiveHeight = isNarrow ? Math.min(height, 220) : height
+  const xTickInterval = isNarrow
+    ? Math.max(0, Math.ceil(data.length / 6) - 1)
+    : 'preserveStartEnd'
 
   const values = data.map(d => d.value)
   const total = values.reduce((a, b) => a + b, 0)
@@ -71,7 +93,7 @@ export default function WeeklyChart({
   return (
     <div className="w-full">
       {title && <h3 className="font-bold text-sm text-gray-300 mb-3">{title}</h3>}
-      <ResponsiveContainer width="100%" height={height}>
+      <ResponsiveContainer width="100%" height={effectiveHeight}>
         <ComposedChart data={chartData} margin={{ top: 10, right: 15, left: -10, bottom: 5 }}>
           <defs>
             <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
@@ -83,10 +105,11 @@ export default function WeeklyChart({
           <XAxis
             dataKey="label"
             stroke="#6b7280"
-            fontSize={11}
+            fontSize={isNarrow ? 10 : 11}
             tickLine={false}
             axisLine={{ stroke: '#1f2937' }}
-            interval="preserveStartEnd"
+            interval={xTickInterval}
+            minTickGap={isNarrow ? 12 : 5}
           />
           <YAxis
             stroke="#6b7280"

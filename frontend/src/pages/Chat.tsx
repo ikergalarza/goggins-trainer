@@ -80,6 +80,10 @@ const TOOL_LABELS: Record<string, string> = {
   delete_workout: 'Eliminando entreno',
   add_workout: 'Añadiendo entreno',
   mark_workout_status: 'Marcando entreno',
+  shift_plan: 'Desplazando el plan',
+  adjust_week_load: 'Ajustando la carga de la semana',
+  get_strava_summary: 'Consultando resumen de Strava',
+  compare_planned_vs_actual: 'Comparando plan vs. realizado',
 }
 
 const SUGGESTIONS = [
@@ -221,25 +225,25 @@ export default function Chat() {
   }
 
   return (
-    <div className="space-y-4 h-[calc(100vh-180px)] flex flex-col">
+    <div className="space-y-4 h-[calc(100vh-150px)] sm:h-[calc(100vh-180px)] flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div>
-          <h1 className="text-3xl font-black tracking-tight">💀 Goggins</h1>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">💀 Goggins</h1>
           <p className="text-gray-500 text-sm mt-1">Stay hard. No excuses. Habla con tu coach.</p>
         </div>
         <button
           onClick={handleClear}
-          className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-2 rounded-lg text-xs font-bold"
+          className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-2 rounded-lg text-xs font-bold shrink-0"
         >
-          🗑 Borrar historial
+          🗑 <span className="hidden sm:inline">Borrar historial</span>
         </button>
       </div>
 
       {/* Mensajes */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4"
+        className="flex-1 overflow-y-auto bg-gray-900 border border-gray-800 rounded-xl p-3 sm:p-4 space-y-4"
       >
         {messages.length === 0 && !streaming && (
           <div className="text-center text-gray-500 mt-8 space-y-4">
@@ -266,7 +270,7 @@ export default function Chat() {
             className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+              className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-3.5 sm:px-4 py-2.5 sm:py-3 text-sm leading-relaxed ${
                 m.role === 'user'
                   ? 'bg-red-600 text-white rounded-br-sm whitespace-pre-wrap'
                   : 'bg-gray-800 text-gray-100 border border-gray-700 rounded-bl-sm'
@@ -286,7 +290,7 @@ export default function Chat() {
         {/* Mensaje en streaming */}
         {streaming && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm leading-relaxed bg-gray-800 text-gray-100 border border-red-900/40">
+            <div className="max-w-[90%] sm:max-w-[85%] rounded-2xl rounded-bl-sm px-3.5 sm:px-4 py-2.5 sm:py-3 text-sm leading-relaxed bg-gray-800 text-gray-100 border border-red-900/40">
               <p className="text-[10px] font-black text-red-400 uppercase tracking-wider mb-1">💀 Goggins</p>
               {streamTools.length > 0 && <ToolEventList events={streamTools} />}
               {streamText ? <Markdown text={streamText} /> : (streamTools.length === 0 && (
@@ -319,12 +323,13 @@ export default function Chat() {
           onChange={e => setInput(e.target.value)}
           placeholder="Escribe a Goggins..."
           disabled={streaming}
-          className="flex-1 bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-sm placeholder:text-gray-600 focus:outline-none focus:border-red-700 disabled:opacity-50"
+          enterKeyHint="send"
+          className="flex-1 min-w-0 bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-base sm:text-sm placeholder:text-gray-600 focus:outline-none focus:border-red-700 disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={streaming || !input.trim()}
-          className="bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white px-6 py-3 rounded-xl text-sm font-bold transition-colors"
+          className="bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white px-4 sm:px-6 py-3 rounded-xl text-sm font-bold transition-colors shrink-0"
         >
           {streaming ? '⏳' : 'Enviar'}
         </button>
