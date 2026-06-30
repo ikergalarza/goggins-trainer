@@ -411,12 +411,19 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
 
     yield {"phase": "calling_ai", "message": "Pidiendo plan a Claude (puede tardar 30-60s)"}
 
+    # Escala max_tokens al tamaño del plan: un plan multideporte de N semanas
+    # con varias sesiones/día y sus instrucciones es mucho más largo que uno de
+    # solo carrera, y a 6000 tokens el JSON se truncaba (fallo "sin weekly_plan").
+    per_week = 1200 if is_tri else 650
+    max_tokens = min(16000, 6000 + weeks * per_week)
+
     client = ai_client.get_client()
     raw_parts: list[str] = []
+    stop_reason: str | None = None
     try:
         with client.messages.stream(
             model=ai_client.DEFAULT_MODEL,
-            max_tokens=6000,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         ) as stream:
@@ -429,6 +436,10 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
                     "chunk": text_chunk,
                     "chars": sum(len(p) for p in raw_parts),
                 }
+        try:
+            stop_reason = stream.get_final_message().stop_reason
+        except Exception:
+            stop_reason = None
     except Exception as e:
         logger.exception(f"[plan_generator] stream falló: {e}")
         yield {"phase": "error", "detail": f"Error llamando a Claude: {e}"}
@@ -439,7 +450,13 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
 
     data, summary = _parse_response(raw)
     if not data or "weekly_plan" not in data:
-        yield {"phase": "error", "detail": f"Respuesta sin weekly_plan: {raw[:200]}"}
+        if stop_reason == "max_tokens":
+            yield {"phase": "error", "detail": (
+                f"El plan se cortó por longitud (max_tokens={max_tokens}, semanas={weeks}). "
+                "Vuelve a intentarlo; si persiste, reduce las semanas del objetivo."
+            )}
+        else:
+            yield {"phase": "error", "detail": f"Respuesta sin weekly_plan: {raw[:200]}"}
         return
 
     yield {"phase": "saving", "message": "Guardando entrenos en la base de datos"}
