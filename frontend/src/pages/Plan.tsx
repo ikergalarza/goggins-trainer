@@ -93,13 +93,24 @@ export default function Plan() {
     if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
   }, [selectedGoalId])
 
-  // Escucha mutaciones del plan desde otras páginas (p.ej. chat Goggins)
+  // Escucha mutaciones del plan desde otras páginas (p.ej. chat Goggins) y
+  // recarga también al volver el foco/visibilidad a la pestaña, por si la
+  // mutación ocurrió mientras el Plan no estaba montado o en otra pestaña.
   useEffect(() => {
-    const onMutation = () => {
+    const reload = () => {
       if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
     }
-    window.addEventListener('plan-mutated', onMutation)
-    return () => window.removeEventListener('plan-mutated', onMutation)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') reload()
+    }
+    window.addEventListener('plan-mutated', reload)
+    window.addEventListener('focus', reload)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('plan-mutated', reload)
+      window.removeEventListener('focus', reload)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [selectedGoalId])
 
   const handleGenerate = async () => {
