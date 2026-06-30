@@ -54,4 +54,11 @@ if STATIC_DIR.exists():
 
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
+        # Sirve archivos reales del build (favicon.svg, etc.) si existen; si no,
+        # cae a index.html para que el router del SPA gestione la ruta.
+        if full_path:
+            candidate = (STATIC_DIR / full_path).resolve()
+            static_root = STATIC_DIR.resolve()
+            if candidate.is_file() and static_root in candidate.parents:
+                return FileResponse(candidate)
         return FileResponse(STATIC_DIR / "index.html")
