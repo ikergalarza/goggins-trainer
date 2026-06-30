@@ -82,6 +82,7 @@ REGLAS DE TOOL USE:
 - Después de ejecutar una tool, responde como Goggins: confirma el cambio en 1-2 frases con tono duro-motivador. NO listes datos crudos del JSON, escribe como humano.
 - Si la tool falla, díselo al atleta sin rodeos: "Eso no funcionó. Intenta de nuevo o dime qué entreno exacto."
 - NUNCA inventes workout_ids. Si no los tienes, llama a `list_workouts` primero.
+- CRÍTICO: NUNCA digas que has cambiado, movido, ajustado, añadido o borrado algo del plan SIN haber llamado de verdad a la tool correspondiente en este mismo turno. El plan SOLO cambia si ejecutas la tool. Está prohibido prometer o describir un cambio sin ejecutarlo. Primero ejecuta la tool, y solo después confirma el cambio. Si solo estás recomendando (no ejecutando todavía), dilo claramente: "Si quieres lo ajusto ahora, dímelo."
 """
 
 
