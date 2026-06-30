@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
@@ -45,8 +46,9 @@ def _serialize_workout(w: Workout) -> dict:
 
 
 @router.post("/generate/{user_id}/{goal_id}")
-def generate(user_id: int, goal_id: int, db: Session = Depends(get_db)):
+def generate(user_id: int, goal_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Genera (o regenera) un plan de entrenamiento para un objetivo (no streaming)."""
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -64,8 +66,9 @@ def generate(user_id: int, goal_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/generate_stream/{user_id}/{goal_id}")
-def generate_stream(user_id: int, goal_id: int, db: Session = Depends(get_db)):
+def generate_stream(user_id: int, goal_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Stream Server-Sent Events con eventos de progreso de la generación."""
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -96,9 +99,11 @@ def generate_stream(user_id: int, goal_id: int, db: Session = Depends(get_db)):
 def list_plan_workouts(
     user_id: int,
     goal_id: Optional[int] = Query(default=None),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Lista los workouts del plan (opcionalmente filtrados por objetivo)."""
+    authorize_user(user_id, current)
     q = db.query(Workout).filter(Workout.user_id == user_id)
     if goal_id is not None:
         # Incluye también los workouts sin objetivo asignado (p.ej. añadidos por
@@ -127,10 +132,11 @@ class WorkoutUpdate(BaseModel):
 
 
 @router.patch("/workout/{workout_id}")
-def update_workout(workout_id: int, body: WorkoutUpdate, db: Session = Depends(get_db)):
+def update_workout(workout_id: int, body: WorkoutUpdate, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     workout = db.query(Workout).filter(Workout.id == workout_id).first()
     if not workout:
         raise HTTPException(status_code=404, detail="Workout no encontrado")
+    authorize_user(workout.user_id, current)
 
     data = body.model_dump(exclude_unset=True)
     if "status" in data:
@@ -162,18 +168,20 @@ def update_workout(workout_id: int, body: WorkoutUpdate, db: Session = Depends(g
 
 
 @router.delete("/workout/{workout_id}")
-def delete_workout(workout_id: int, db: Session = Depends(get_db)):
+def delete_workout(workout_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     workout = db.query(Workout).filter(Workout.id == workout_id).first()
     if not workout:
         raise HTTPException(status_code=404, detail="Workout no encontrado")
+    authorize_user(workout.user_id, current)
     db.delete(workout)
     db.commit()
     return {"message": "Workout eliminado"}
 
 
 @router.delete("/by_goal/{user_id}/{goal_id}")
-def delete_plan(user_id: int, goal_id: int, db: Session = Depends(get_db)):
+def delete_plan(user_id: int, goal_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Borra todos los workouts planificados (no completados) de un objetivo."""
+    authorize_user(user_id, current)
     deleted = (
         db.query(Workout)
         .filter(
@@ -188,8 +196,9 @@ def delete_plan(user_id: int, goal_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/match_strava/{user_id}")
-def match_strava(user_id: int, db: Session = Depends(get_db)):
+def match_strava(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Empareja workouts planificados con actividades de Strava del mismo día."""
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")

@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.db.database import get_db
+from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.services import strava as strava_service
 
@@ -20,9 +21,10 @@ class TokenInput(BaseModel):
 
 
 @router.post("/tokens/{user_id}")
-def set_tokens(user_id: int, body: TokenInput, db: Session = Depends(get_db)):
+def set_tokens(user_id: int, body: TokenInput, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Guarda los tokens de Strava directamente.
     Si el usuario no existe, lo crea automáticamente."""
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         user = User(id=user_id, name="Atleta", email=f"user{user_id}@goggins.local")
@@ -58,9 +60,12 @@ def set_tokens(user_id: int, body: TokenInput, db: Session = Depends(get_db)):
 
 
 @router.get("/auth")
-def strava_auth(user_id: int = Query(...)):
+def strava_auth(user_id: int = Query(...), current: User = Depends(get_current_user)):
+    authorize_user(user_id, current)
+    # Devolvemos la URL como JSON (en vez de redirigir) para que el frontend
+    # pueda pedirla con el token Bearer y luego navegar manualmente a Strava.
     url = strava_service.get_auth_url(user_id)
-    return RedirectResponse(url)
+    return {"url": url}
 
 
 @router.get("/callback")
@@ -98,9 +103,11 @@ def strava_callback(
 def sync_strava(
     user_id: int,
     all: bool = Query(default=False),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Sincroniza actividades. Con all=true descarga todo el historial."""
+    authorize_user(user_id, current)
     max_pages = 50 if all else 2
     logger.info(f"[sync] Petición de sync para user_id={user_id}, all={all}, max_pages={max_pages}")
     user = db.query(User).filter(User.id == user_id).first()
@@ -135,10 +142,12 @@ def sync_strava(
 def get_activities(
     user_id: int,
     limit: int = Query(default=20, ge=1, le=5000),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     from app.models.strava_activity import StravaActivity
 
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         return []  # no 404 — el frontend puede seguir funcionando
@@ -173,6 +182,7 @@ def get_activity_detail(
     user_id: int,
     activity_id: int,
     refresh: bool = Query(default=False),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Devuelve el detalle completo de una actividad: streams, laps, segmentos.
@@ -183,6 +193,7 @@ def get_activity_detail(
     from app.models.strava_activity import StravaActivity
     from app.models.activity_detail import ActivityDetail
 
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -296,12 +307,14 @@ def get_activity_detail(
 def weekly_stats(
     user_id: int,
     weeks: int = Query(default=12, ge=1, le=52),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Devuelve estadísticas semanales agregadas para las últimas N semanas."""
     from datetime import datetime, timedelta, timezone
     from app.models.strava_activity import StravaActivity
 
+    authorize_user(user_id, current)
     since = datetime.now(timezone.utc) - timedelta(weeks=weeks + 1)
 
     activities = (
@@ -377,7 +390,8 @@ def weekly_stats(
 
 
 @router.get("/status/{user_id}")
-def strava_status(user_id: int, db: Session = Depends(get_db)):
+def strava_status(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         return {"connected": False, "athlete_id": None}

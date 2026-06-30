@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 
-const nav = [
+const baseNav = [
   { to: '/', label: '🏠 Dashboard' },
   { to: '/goals', label: '🎯 Objetivos' },
   { to: '/plan', label: '🗓️ Plan' },
@@ -13,9 +14,25 @@ const nav = [
 
 export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false)
+  const { user, isMaster, viewAs, setViewAs, logout } = useAuth()
+
+  const nav = isMaster ? [...baseNav, { to: '/admin', label: '🛡️ Admin' }] : baseNav
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
+      {/* Banner de impersonación del maestro */}
+      {viewAs && (
+        <div className="bg-amber-600 text-black text-sm font-bold px-4 py-2 flex items-center justify-between gap-3">
+          <span>👁️ Viendo como <strong>{viewAs.name}</strong> ({viewAs.email})</span>
+          <button
+            onClick={() => setViewAs(null)}
+            className="bg-black/20 hover:bg-black/30 px-3 py-1 rounded-lg text-xs"
+          >
+            Volver a mi cuenta
+          </button>
+        </div>
+      )}
+
       <header className="border-b border-red-900/40 bg-gray-950/90 backdrop-blur px-4 sm:px-6 py-4 sticky top-0 z-20">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -25,7 +42,7 @@ export default function Layout() {
           </div>
 
           {/* Nav escritorio */}
-          <nav className="hidden md:flex gap-1">
+          <nav className="hidden md:flex items-center gap-1">
             {nav.map(({ to, label }) => (
               <NavLink
                 key={to}
@@ -42,6 +59,13 @@ export default function Layout() {
                 {label}
               </NavLink>
             ))}
+            <button
+              onClick={logout}
+              title={user?.email}
+              className="ml-1 px-3 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-white hover:bg-gray-800 transition-colors"
+            >
+              ⎋ Salir
+            </button>
           </nav>
 
           {/* Botón hamburguesa móvil */}
@@ -75,6 +99,12 @@ export default function Layout() {
                 {label}
               </NavLink>
             ))}
+            <button
+              onClick={() => { setMenuOpen(false); logout() }}
+              className="text-left px-4 py-3 rounded-lg text-sm font-medium text-gray-500 hover:text-white hover:bg-gray-800 transition-colors"
+            >
+              ⎋ Salir ({user?.email})
+            </button>
           </nav>
         )}
       </header>

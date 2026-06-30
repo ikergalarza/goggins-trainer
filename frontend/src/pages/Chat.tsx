@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import api from '../api'
+import api, { API_BASE, authHeaders } from '../api'
+import { useAuth } from '../auth/AuthContext'
 
 // Markdown inline minimalista: **bold**, *italic*, `code`. No depende de libs.
 function renderInline(text: string): ReactNode[] {
@@ -55,8 +56,6 @@ function Markdown({ text }: { text: string }) {
   return <div className="space-y-0">{blocks}</div>
 }
 
-const USER_ID = 1
-
 interface ToolEvent {
   name: string
   ok?: boolean
@@ -98,6 +97,7 @@ const SUGGESTIONS = [
 ]
 
 export default function Chat() {
+  const { effectiveUserId } = useAuth()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -106,12 +106,13 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Cargar historial al montar
+  // Cargar historial al montar (y al cambiar de usuario)
   useEffect(() => {
-    api.get(`/api/chat/${USER_ID}`)
+    if (effectiveUserId == null) return
+    api.get(`/api/chat/${effectiveUserId}`)
       .then(r => setMessages(r.data))
       .catch(() => {})
-  }, [])
+  }, [effectiveUserId])
 
   // Auto-scroll al fondo
   useEffect(() => {
@@ -122,7 +123,7 @@ export default function Chat() {
 
   const handleSend = async (text?: string) => {
     const message = (text ?? input).trim()
-    if (!message || streaming) return
+    if (!message || streaming || effectiveUserId == null) return
 
     setError(null)
     setInput('')
@@ -131,13 +132,12 @@ export default function Chat() {
     setStreamText('')
     setStreamTools([])
 
-    const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) || ''
-    const url = `${baseUrl}/api/chat/${USER_ID}/send_stream`
+    const url = `${API_BASE}/api/chat/${effectiveUserId}/send_stream`
 
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ message }),
       })
       if (!res.ok || !res.body) {
@@ -213,9 +213,10 @@ export default function Chat() {
   }
 
   const handleClear = async () => {
+    if (effectiveUserId == null) return
     if (!confirm('¿Borrar todo el historial del chat?')) return
     try {
-      await api.delete(`/api/chat/${USER_ID}`)
+      await api.delete(`/api/chat/${effectiveUserId}`)
       setMessages([])
       setStreamText('')
       setError(null)

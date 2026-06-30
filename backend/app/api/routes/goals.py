@@ -5,6 +5,8 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.api.deps import get_current_user, authorize_user
+from app.models.user import User
 from app.models.goal import Goal, GoalType
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
@@ -70,7 +72,8 @@ def _serialize(goal: Goal) -> dict:
 
 
 @router.get("/{user_id}")
-def list_goals(user_id: int, active_only: bool = False, db: Session = Depends(get_db)):
+def list_goals(user_id: int, active_only: bool = False, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     q = db.query(Goal).filter(Goal.user_id == user_id)
     if active_only:
         q = q.filter(Goal.is_active == True)  # noqa
@@ -79,7 +82,8 @@ def list_goals(user_id: int, active_only: bool = False, db: Session = Depends(ge
 
 
 @router.post("/{user_id}")
-def create_goal(user_id: int, body: GoalIn, db: Session = Depends(get_db)):
+def create_goal(user_id: int, body: GoalIn, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     goal_type = _resolve_goal_type(body.type)
 
     goal = Goal(
@@ -106,7 +110,8 @@ def create_goal(user_id: int, body: GoalIn, db: Session = Depends(get_db)):
 
 
 @router.put("/{user_id}/{goal_id}")
-def update_goal(user_id: int, goal_id: int, body: GoalIn, db: Session = Depends(get_db)):
+def update_goal(user_id: int, goal_id: int, body: GoalIn, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     goal = db.query(Goal).filter(Goal.id == goal_id, Goal.user_id == user_id).first()
     if not goal:
         raise HTTPException(status_code=404, detail="Objetivo no encontrado")
@@ -123,7 +128,8 @@ def update_goal(user_id: int, goal_id: int, body: GoalIn, db: Session = Depends(
 
 
 @router.delete("/{user_id}/{goal_id}")
-def delete_goal(user_id: int, goal_id: int, db: Session = Depends(get_db)):
+def delete_goal(user_id: int, goal_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     goal = db.query(Goal).filter(Goal.id == goal_id, Goal.user_id == user_id).first()
     if not goal:
         raise HTTPException(status_code=404, detail="Objetivo no encontrado")

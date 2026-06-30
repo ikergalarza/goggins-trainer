@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../api'
-
-const USER_ID = 1
+import { useAuth } from '../auth/AuthContext'
 
 interface Activity {
   id: number
@@ -17,15 +16,17 @@ interface Activity {
 }
 
 export default function Activities() {
+  const { effectiveUserId } = useAuth()
   const [activities, setActivities] = useState<Activity[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get(`/api/strava/activities/${USER_ID}?limit=1000`)
+    if (effectiveUserId == null) return
+    api.get(`/api/strava/activities/${effectiveUserId}?limit=1000`)
       .then(r => setActivities(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  }, [effectiveUserId])
 
   return (
     <div className="space-y-6">

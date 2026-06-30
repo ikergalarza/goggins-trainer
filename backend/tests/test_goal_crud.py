@@ -37,7 +37,7 @@ def test_create_goal_triathlon_sport(db, user):
         target_race_date=date(2026, 6, 1),
         target_time_seconds=9000,
     )
-    out = create_goal(user.id, body, db)
+    out = create_goal(user.id, body, current=user, db=db)
     assert out["sport"] == "triathlon"
     # Se persiste como race pero se expone como 'triathlon' al frontend.
     assert out["type"] == "triathlon"
@@ -60,7 +60,7 @@ def test_create_goal_triathlon_como_lo_manda_el_frontend(db, user):
         target_race_date=date(2026, 9, 12),
         target_time_seconds=4740,
     )
-    out = create_goal(user.id, body, db)
+    out = create_goal(user.id, body, current=user, db=db)
     assert out["type"] == "triathlon"
     assert out["sport"] == "triathlon"
     assert out["triathlon_distance"] == "sprint"
@@ -75,31 +75,32 @@ def test_create_goal_tipo_invalido(db, user):
 
     body = GoalIn(sport="triathlon", type="no_existe", description="x")
     with pytest.raises(HTTPException) as exc:
-        create_goal(user.id, body, db)
+        create_goal(user.id, body, current=user, db=db)
     assert exc.value.status_code == 400
 
 
 def test_list_goals_filtra_por_usuario_y_activo(db, user, other_user):
-    create_goal(user.id, GoalIn(sport="triathlon", type="race", description="a", is_active=True), db)
-    create_goal(user.id, GoalIn(sport="running", type="fitness", description="b", is_active=False), db)
-    create_goal(other_user.id, GoalIn(sport="triathlon", type="race", description="c"), db)
+    create_goal(user.id, GoalIn(sport="triathlon", type="race", description="a", is_active=True), current=user, db=db)
+    create_goal(user.id, GoalIn(sport="running", type="fitness", description="b", is_active=False), current=user, db=db)
+    create_goal(other_user.id, GoalIn(sport="triathlon", type="race", description="c"), current=other_user, db=db)
 
-    todos = list_goals(user.id, active_only=False, db=db)
+    todos = list_goals(user.id, active_only=False, current=user, db=db)
     assert len(todos) == 2
-    activos = list_goals(user.id, active_only=True, db=db)
+    activos = list_goals(user.id, active_only=True, current=user, db=db)
     assert len(activos) == 1
     assert activos[0]["description"] == "a"
 
 
 def test_update_goal(db, user):
     created = create_goal(
-        user.id, GoalIn(sport="triathlon", type="race", description="viejo"), db
+        user.id, GoalIn(sport="triathlon", type="race", description="viejo"), current=user, db=db
     )
     updated = update_goal(
         user.id,
         created["id"],
         GoalIn(sport="triathlon", type="race", description="nuevo", target_weekly_km=50.0),
-        db,
+        current=user,
+        db=db,
     )
     assert updated["description"] == "nuevo"
     assert updated["target_weekly_km"] == 50.0
@@ -108,24 +109,24 @@ def test_update_goal(db, user):
 def test_update_goal_ajeno_404(db, user, other_user):
     from fastapi import HTTPException
 
-    created = create_goal(other_user.id, GoalIn(type="race", description="x"), db)
+    created = create_goal(other_user.id, GoalIn(type="race", description="x"), current=other_user, db=db)
     with pytest.raises(HTTPException) as exc:
-        update_goal(user.id, created["id"], GoalIn(type="race", description="y"), db)
+        update_goal(user.id, created["id"], GoalIn(type="race", description="y"), current=user, db=db)
     assert exc.value.status_code == 404
 
 
 def test_delete_goal(db, user):
-    created = create_goal(user.id, GoalIn(type="race", description="x"), db)
-    delete_goal(user.id, created["id"], db)
+    created = create_goal(user.id, GoalIn(type="race", description="x"), current=user, db=db)
+    delete_goal(user.id, created["id"], current=user, db=db)
     assert db.query(Goal).filter(Goal.id == created["id"]).first() is None
 
 
 def test_delete_goal_ajeno_404(db, user, other_user):
     from fastapi import HTTPException
 
-    created = create_goal(other_user.id, GoalIn(type="race", description="x"), db)
+    created = create_goal(other_user.id, GoalIn(type="race", description="x"), current=other_user, db=db)
     with pytest.raises(HTTPException) as exc:
-        delete_goal(user.id, created["id"], db)
+        delete_goal(user.id, created["id"], current=user, db=db)
     assert exc.value.status_code == 404
 
 

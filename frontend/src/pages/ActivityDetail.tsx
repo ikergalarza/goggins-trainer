@@ -12,8 +12,7 @@ import {
   Legend,
 } from 'recharts'
 import api from '../api'
-
-const USER_ID = 1
+import { useAuth } from '../auth/AuthContext'
 
 interface StreamData {
   data?: number[]
@@ -90,6 +89,7 @@ function downsample<T>(arr: T[], target: number): T[] {
 }
 
 export default function ActivityDetail() {
+  const { effectiveUserId } = useAuth()
   const { activityId } = useParams<{ activityId: string }>()
   const [data, setData] = useState<ActivityDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -98,9 +98,10 @@ export default function ActivityDetail() {
 
   const load = (refresh = false) => {
     if (!activityId) return
+    if (effectiveUserId == null) return
     setLoading(true)
     setError(null)
-    api.get(`/api/strava/activity/${USER_ID}/${activityId}${refresh ? '?refresh=true' : ''}`)
+    api.get(`/api/strava/activity/${effectiveUserId}/${activityId}${refresh ? '?refresh=true' : ''}`)
       .then(r => setData(r.data))
       .catch(e => setError(e?.response?.data?.detail || e?.message || 'Error'))
       .finally(() => {
@@ -111,7 +112,7 @@ export default function ActivityDetail() {
 
   useEffect(() => {
     load(false)
-  }, [activityId])
+  }, [activityId, effectiveUserId])
 
   if (loading && !refreshing) return <p className="text-gray-500">Cargando detalle...</p>
   if (error) return (

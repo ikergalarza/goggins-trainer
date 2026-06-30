@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import api from '../api'
+import api, { API_BASE, authHeaders } from '../api'
+import { useAuth } from '../auth/AuthContext'
 import WorkoutCard from '../components/WorkoutCard'
 import {
   TYPE_LABELS,
@@ -13,8 +14,6 @@ import {
   type Discipline,
 } from '../components/workoutMeta'
 import { parseLocalDate, formatDayKey, startOfWeek } from '../lib/date'
-
-const USER_ID = 1
 
 // Disciplinas mostradas en la leyenda (orden lógico de un triatlón + fuerza/descanso).
 const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'strength', 'mobility', 'rest']
@@ -55,6 +54,7 @@ const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 // de zona horaria allí.
 
 export default function Plan() {
+  const { effectiveUserId } = useAuth()
   const [goals, setGoals] = useState<Goal[]>([])
   const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null)
   const [workouts, setWorkouts] = useState<Workout[]>([])
@@ -68,21 +68,23 @@ export default function Plan() {
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
 
-  // Carga inicial
+  // Carga inicial (y al cambiar de usuario "ver como")
   useEffect(() => {
-    api.get(`/api/goals/${USER_ID}?active_only=true`)
+    if (effectiveUserId == null) return
+    api.get(`/api/goals/${effectiveUserId}?active_only=true`)
       .then(r => {
         setGoals(r.data)
         if (r.data.length > 0) setSelectedGoalId(r.data[0].id)
       })
       .catch(() => {})
-  }, [])
+  }, [effectiveUserId])
 
   const fetchWorkouts = (goalId: number | null) => {
+    if (effectiveUserId == null) return
     setLoading(true)
     const url = goalId
-      ? `/api/plans/${USER_ID}?goal_id=${goalId}`
-      : `/api/plans/${USER_ID}`
+      ? `/api/plans/${effectiveUserId}?goal_id=${goalId}`
+      : `/api/plans/${effectiveUserId}`
     api.get(url)
       .then(r => setWorkouts(r.data))
       .catch(() => setWorkouts([]))
@@ -114,20 +116,19 @@ export default function Plan() {
   }, [selectedGoalId])
 
   const handleGenerate = async () => {
-    if (!selectedGoalId) return
+    if (!selectedGoalId || effectiveUserId == null) return
     setGenerating(true)
     setProgress(0)
     setProgressMsg('Iniciando...')
     setStreamChars(0)
     setMsg(null)
 
-    const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) || ''
-    const url = `${baseUrl}/api/plans/generate_stream/${USER_ID}/${selectedGoalId}`
+    const url = `${API_BASE}/api/plans/generate_stream/${effectiveUserId}/${selectedGoalId}`
 
     try {
       let res: Response
       try {
-        res = await fetch(url, { method: 'POST' })
+        res = await fetch(url, { method: 'POST', headers: authHeaders() })
       } catch (netErr: any) {
         throw new Error(
           `No se pudo conectar con el backend (${url}). ` +
@@ -211,7 +212,7 @@ export default function Plan() {
   const handleMatch = async () => {
     setMsg(null)
     try {
-      const r = await api.post(`/api/plans/match_strava/${USER_ID}`)
+      const r = await api.post(`/api/plans/match_strava/${effectiveUserId}`)
       setMsg({ text: `${r.data.matched} entrenos emparejados con Strava`, ok: true })
       if (selectedGoalId) fetchWorkouts(selectedGoalId)
     } catch (e: any) {

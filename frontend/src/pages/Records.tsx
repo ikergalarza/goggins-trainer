@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
-
-const USER_ID = 1
+import { useAuth } from '../auth/AuthContext'
 
 interface PRecord {
   id: number
@@ -47,6 +46,7 @@ function parseTimeString(str: string): number | null {
 }
 
 export default function Records() {
+  const { effectiveUserId } = useAuth()
   const [records, setRecords] = useState<PRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -63,16 +63,18 @@ export default function Records() {
   const isTime = currentCat.unit === 'seconds'
 
   const load = () => {
+    if (effectiveUserId == null) return
     setLoading(true)
-    api.get(`/api/records/${USER_ID}`)
+    api.get(`/api/records/${effectiveUserId}`)
       .then(r => setRecords(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  useEffect(load, [effectiveUserId])
 
   const handleSave = async () => {
+    if (effectiveUserId == null) return
     setSaving(true)
     try {
       const payload: any = {
@@ -92,7 +94,7 @@ export default function Records() {
       } else {
         payload.value_numeric = parseFloat(numericVal)
       }
-      await api.post(`/api/records/${USER_ID}`, payload)
+      await api.post(`/api/records/${effectiveUserId}`, payload)
       setTimeStr('')
       setNumericVal('')
       setNotes('')
@@ -106,8 +108,9 @@ export default function Records() {
   }
 
   const handleDelete = async (id: number) => {
+    if (effectiveUserId == null) return
     if (!confirm('¿Eliminar marca?')) return
-    await api.delete(`/api/records/${USER_ID}/${id}`)
+    await api.delete(`/api/records/${effectiveUserId}/${id}`)
     load()
   }
 

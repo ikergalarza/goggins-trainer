@@ -3,8 +3,7 @@ import { Link } from 'react-router-dom'
 import StatCard from '../components/StatCard'
 import WeeklyChart from '../components/WeeklyChart'
 import api from '../api'
-
-const USER_ID = 1
+import { useAuth } from '../auth/AuthContext'
 
 const HR_ZONES_META = [
   { zone: 'Z1', label: 'Recuperación', color: 'bg-blue-500' },
@@ -25,6 +24,7 @@ interface Activity {
 }
 
 export default function Dashboard() {
+  const { effectiveUserId } = useAuth()
   const [activities, setActivities] = useState<Activity[]>([])
   const [stravaConnected, setStravaConnected] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -38,28 +38,31 @@ export default function Dashboard() {
   const [chartWeeks, setChartWeeks] = useState(12)
 
   useEffect(() => {
-    api.get(`/api/strava/status/${USER_ID}`)
+    if (effectiveUserId == null) return
+    api.get(`/api/strava/status/${effectiveUserId}`)
       .then(r => setStravaConnected(r.data.connected))
       .catch(() => {})
-    api.get(`/api/strava/activities/${USER_ID}?limit=5`)
+    api.get(`/api/strava/activities/${effectiveUserId}?limit=5`)
       .then(r => setActivities(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
-    api.get(`/api/profile/${USER_ID}`).then(r => setProfile(r.data)).catch(() => {})
-    api.get(`/api/ai/insights/${USER_ID}?kind=fitness_state`).then(r => setInsight(r.data)).catch(() => {})
-  }, [])
+    api.get(`/api/profile/${effectiveUserId}`).then(r => setProfile(r.data)).catch(() => {})
+    api.get(`/api/ai/insights/${effectiveUserId}?kind=fitness_state`).then(r => setInsight(r.data)).catch(() => {})
+  }, [effectiveUserId])
 
   useEffect(() => {
-    api.get(`/api/strava/weekly_stats/${USER_ID}?weeks=${chartWeeks}`)
+    if (effectiveUserId == null) return
+    api.get(`/api/strava/weekly_stats/${effectiveUserId}?weeks=${chartWeeks}`)
       .then(r => setWeeklyStats(r.data))
       .catch(() => {})
-  }, [chartWeeks])
+  }, [chartWeeks, effectiveUserId])
 
   const handleAnalyze = async () => {
+    if (effectiveUserId == null) return
     setAnalyzing(true)
     setAiError(null)
     try {
-      const r = await api.post(`/api/ai/analyze/${USER_ID}`)
+      const r = await api.post(`/api/ai/analyze/${effectiveUserId}`)
       setInsight(r.data)
     } catch (e: any) {
       setAiError(e?.response?.data?.detail || e?.message || 'Error desconocido')
@@ -80,12 +83,13 @@ export default function Dashboard() {
   const total12wMin = weeklyStats.reduce((s, w) => s + w.time_min, 0)
 
   const handleSync = async (syncAll = false) => {
+    if (effectiveUserId == null) return
     setSyncing(true)
     setSyncMsg(null)
     try {
-      const url = `/api/strava/sync/${USER_ID}${syncAll ? '?all=true' : ''}`
+      const url = `/api/strava/sync/${effectiveUserId}${syncAll ? '?all=true' : ''}`
       const syncRes = await api.post(url)
-      const r = await api.get(`/api/strava/activities/${USER_ID}?limit=5`)
+      const r = await api.get(`/api/strava/activities/${effectiveUserId}?limit=5`)
       setActivities(r.data)
       setSyncMsg({ text: `Sincronización OK: ${syncRes.data.new_activities} nuevas actividades`, ok: true })
     } catch (e: any) {

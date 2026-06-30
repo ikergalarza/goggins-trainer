@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 # (tabla, columna, definición SQL)
 COLUMNS_TO_ADD = [
+    # User — auth
+    ("users", "hashed_password", "VARCHAR"),
+    ("users", "is_master", "BOOLEAN DEFAULT FALSE"),
+
     # User — campos nuevos
     ("users", "sex", "VARCHAR"),
     ("users", "years_training", "INTEGER"),

@@ -5,9 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.api.routes import strava, profile, records, goals, ai, plans, chat
+from app.api.routes import strava, profile, records, goals, ai, plans, chat, auth
 from app.db.database import engine, Base
 from app.db.migrations import ensure_schema
+from app.db.seed import seed_master
 import app.models  # noqa
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -17,6 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_schema(engine)
+    seed_master()
     yield
 
 
@@ -30,6 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(strava.router)
 app.include_router(profile.router)
 app.include_router(records.router)

@@ -12,7 +12,7 @@
 
 ## Decisiones aprobadas
 1. **Sesión:** JWT (token Bearer en localStorage). Libs: `bcrypt` + `pyjwt`.
-2. **Maestro:** el usuario actual (id=1, con todos los datos) se convierte en maestro: email `ikergalarza1999@gmail.com`, password `123456Iker` (hasheada), `is_master=true`.
+2. **Maestro:** el usuario actual (id=1, con todos los datos) se convierte en maestro: email `ikergalarza1999@gmail.com`, contraseña aportada por variable de entorno `MASTER_PASSWORD` (hasheada con bcrypt; NUNCA en el código), `is_master=true`.
 3. **Vista maestro:** panel de administración (vista combinada) que lista todos los usuarios con resumen + crear usuario + "ver como" para entrar a los datos completos de cada uno.
 4. **Alta:** solo el maestro crea usuarios (sin registro público).
 
@@ -44,7 +44,7 @@
 
 ## Seguridad / notas
 - Poner `JWT_SECRET` en Railway para producción (hay default solo para desarrollo).
-- `123456Iker` es débil; recomendar cambiarla.
+- La contraseña elegida es débil; recomendar cambiarla y, sobre todo, definirla solo por entorno.
 - Riesgo: romper el login deja fuera de producción → implementar en rama, verificar (pytest + build + arranque), luego merge a main.
 
 ## Criterio de éxito

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
-
-const USER_ID = 1
+import { useAuth } from '../auth/AuthContext'
 
 interface ProfileData {
   id: number
@@ -43,6 +42,7 @@ function paceToMs(pace: string): number | null {
 }
 
 export default function Profile() {
+  const { effectiveUserId } = useAuth()
   const [profile, setProfile] = useState<ProfileData | null>(null)
   const [vamPace, setVamPace] = useState('')
   const [stravaConnected, setStravaConnected] = useState(false)
@@ -50,15 +50,23 @@ export default function Profile() {
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
 
   useEffect(() => {
-    api.get(`/api/profile/${USER_ID}`).then(r => {
+    if (effectiveUserId == null) return
+    api.get(`/api/profile/${effectiveUserId}`).then(r => {
       setProfile(r.data)
       setVamPace(msToPace(r.data.vam_ms))
     }).catch(() => {})
-    api.get(`/api/strava/status/${USER_ID}`).then(r => setStravaConnected(r.data.connected)).catch(() => {})
-  }, [])
+    api.get(`/api/strava/status/${effectiveUserId}`).then(r => setStravaConnected(r.data.connected)).catch(() => {})
+  }, [effectiveUserId])
 
-  const handleConnectStrava = () => {
-    window.location.href = `/api/strava/auth?user_id=${USER_ID}`
+  const handleConnectStrava = async () => {
+    if (effectiveUserId == null) return
+    try {
+      // El endpoint exige token, así que pedimos la URL por axios y navegamos.
+      const r = await api.get(`/api/strava/auth?user_id=${effectiveUserId}`)
+      window.location.href = r.data.url
+    } catch {
+      setMsg({ text: 'No se pudo iniciar la conexión con Strava', ok: false })
+    }
   }
 
   const update = (field: keyof ProfileData, value: any) => {
@@ -82,8 +90,8 @@ export default function Profile() {
     try {
       const { id, name, hr_zones, target_paces, ...rest } = profile
       const payload = { ...rest, vam_ms: vamMs }
-      await api.put(`/api/profile/${USER_ID}`, payload)
-      const r = await api.get(`/api/profile/${USER_ID}`)
+      await api.put(`/api/profile/${effectiveUserId}`, payload)
+      const r = await api.get(`/api/profile/${effectiveUserId}`)
       setProfile(r.data)
       setVamPace(msToPace(r.data.vam_ms))
       setMsg({ text: 'Perfil guardado', ok: true })

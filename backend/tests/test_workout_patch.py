@@ -13,7 +13,7 @@ def _mk(db, user):
 
 def test_patch_status_persiste(db, user):
     w = _mk(db, user)
-    out = update_workout(w.id, WorkoutUpdate(status="completed"), db)
+    out = update_workout(w.id, WorkoutUpdate(status="completed"), current=user, db=db)
     assert out["status"] == "completed"
     db.expire_all()
     assert db.query(Workout).get(w.id).status == WorkoutStatus.completed
@@ -21,7 +21,7 @@ def test_patch_status_persiste(db, user):
 
 def test_patch_date_persiste_y_recalcula_dow(db, user):
     w = _mk(db, user)
-    out = update_workout(w.id, WorkoutUpdate(date=date(2026, 6, 3)), db)  # miércoles
+    out = update_workout(w.id, WorkoutUpdate(date=date(2026, 6, 3)), current=user, db=db)  # miércoles
     assert out["date"] == "2026-06-03"
     db.expire_all()
     stored = db.query(Workout).get(w.id)
@@ -31,7 +31,7 @@ def test_patch_date_persiste_y_recalcula_dow(db, user):
 
 def test_patch_type_mobility(db, user):
     w = _mk(db, user)
-    out = update_workout(w.id, WorkoutUpdate(type="mobility"), db)
+    out = update_workout(w.id, WorkoutUpdate(type="mobility"), current=user, db=db)
     assert out["type"] == "mobility"
 
 

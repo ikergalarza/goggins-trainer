@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
-
-const USER_ID = 1
+import { useAuth } from '../auth/AuthContext'
 
 interface Goal {
   id: number
@@ -53,6 +52,7 @@ function parseTimeString(str: string): number | null {
 }
 
 export default function Goals() {
+  const { effectiveUserId } = useAuth()
   const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -70,14 +70,15 @@ export default function Goals() {
   const [saving, setSaving] = useState(false)
 
   const load = () => {
+    if (effectiveUserId == null) return
     setLoading(true)
-    api.get(`/api/goals/${USER_ID}`)
+    api.get(`/api/goals/${effectiveUserId}`)
       .then(r => setGoals(r.data))
       .catch(() => {})
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  useEffect(load, [effectiveUserId])
 
   const resetForm = () => {
     setDescription('')
@@ -89,6 +90,7 @@ export default function Goals() {
   }
 
   const handleSave = async () => {
+    if (effectiveUserId == null) return
     setSaving(true)
     try {
       const payload: any = {
@@ -115,7 +117,7 @@ export default function Goals() {
       } else if (type === 'weekly_km') {
         payload.target_weekly_km = weeklyKm ? parseFloat(weeklyKm) : null
       }
-      await api.post(`/api/goals/${USER_ID}`, payload)
+      await api.post(`/api/goals/${effectiveUserId}`, payload)
       resetForm()
       setShowForm(false)
       load()
@@ -127,8 +129,9 @@ export default function Goals() {
   }
 
   const handleDelete = async (id: number) => {
+    if (effectiveUserId == null) return
     if (!confirm('¿Eliminar objetivo?')) return
-    await api.delete(`/api/goals/${USER_ID}/${id}`)
+    await api.delete(`/api/goals/${effectiveUserId}/${id}`)
     load()
   }
 

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.models.chat_message import ChatMessage
 from app.services import goggins_agent
@@ -20,8 +21,9 @@ class ChatIn(BaseModel):
 
 
 @router.get("/{user_id}")
-def get_history(user_id: int, db: Session = Depends(get_db)):
+def get_history(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Devuelve el historial completo del chat ordenado cronológicamente."""
+    authorize_user(user_id, current)
     rows = (
         db.query(ChatMessage)
         .filter(ChatMessage.user_id == user_id)
@@ -40,16 +42,18 @@ def get_history(user_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{user_id}")
-def clear_history(user_id: int, db: Session = Depends(get_db)):
+def clear_history(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Borra todo el historial del chat del usuario."""
+    authorize_user(user_id, current)
     deleted = db.query(ChatMessage).filter(ChatMessage.user_id == user_id).delete()
     db.commit()
     return {"deleted": deleted}
 
 
 @router.post("/{user_id}/send_stream")
-def send_stream(user_id: int, body: ChatIn, db: Session = Depends(get_db)):
+def send_stream(user_id: int, body: ChatIn, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Stream SSE con la respuesta de Goggins en tiempo real."""
+    authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")

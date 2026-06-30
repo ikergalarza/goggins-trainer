@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.services.hr_zones import compute_hr_zones, compute_paces_from_vam
 
@@ -34,7 +35,8 @@ def _user_or_create(db: Session, user_id: int) -> User:
 
 
 @router.get("/{user_id}")
-def get_profile(user_id: int, db: Session = Depends(get_db)):
+def get_profile(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     user = _user_or_create(db, user_id)
     db.commit()
     hr_data = compute_hr_zones(user.age, user.max_heart_rate, user.resting_heart_rate, user.sex)
@@ -58,7 +60,8 @@ def get_profile(user_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{user_id}")
-def update_profile(user_id: int, body: ProfileIn, db: Session = Depends(get_db)):
+def update_profile(user_id: int, body: ProfileIn, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    authorize_user(user_id, current)
     user = _user_or_create(db, user_id)
 
     for field, value in body.model_dump(exclude_unset=True).items():
