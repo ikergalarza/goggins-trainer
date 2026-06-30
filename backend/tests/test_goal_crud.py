@@ -39,12 +39,35 @@ def test_create_goal_triathlon_sport(db, user):
     )
     out = create_goal(user.id, body, db)
     assert out["sport"] == "triathlon"
-    assert out["type"] == "race"
+    # Se persiste como race pero se expone como 'triathlon' al frontend.
+    assert out["type"] == "triathlon"
     assert out["id"] is not None
 
     stored = db.query(Goal).filter(Goal.id == out["id"]).first()
     assert stored.sport == "triathlon"
     assert stored.type == GoalType.race
+
+
+def test_create_goal_triathlon_como_lo_manda_el_frontend(db, user):
+    """El frontend envía type='triathlon' + triathlon_distance; debe persistir
+    como race + sport=triathlon y devolver la distancia (regresión del bug
+    'Tipo de objetivo inválido: triathlon')."""
+    body = GoalIn(
+        sport="triathlon",
+        type="triathlon",
+        description="Tritour Tossa de Mar 2026",
+        triathlon_distance="sprint",
+        target_race_date=date(2026, 9, 12),
+        target_time_seconds=4740,
+    )
+    out = create_goal(user.id, body, db)
+    assert out["type"] == "triathlon"
+    assert out["sport"] == "triathlon"
+    assert out["triathlon_distance"] == "sprint"
+
+    stored = db.query(Goal).filter(Goal.id == out["id"]).first()
+    assert stored.type == GoalType.race
+    assert stored.triathlon_distance == "sprint"
 
 
 def test_create_goal_tipo_invalido(db, user):
