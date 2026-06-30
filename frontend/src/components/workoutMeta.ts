@@ -2,7 +2,7 @@
 // El backend NO almacena `discipline` (solo `type`), así que la derivamos aquí
 // a partir del `type` para colorear y agrupar de forma consistente.
 
-export type Discipline = 'swim' | 'bike' | 'run' | 'brick' | 'strength' | 'rest'
+export type Discipline = 'swim' | 'bike' | 'run' | 'brick' | 'strength' | 'mobility' | 'rest'
 
 // Etiquetas legibles por tipo de entreno (es-ES).
 export const TYPE_LABELS: Record<string, string> = {
@@ -21,6 +21,7 @@ export const TYPE_LABELS: Record<string, string> = {
   strength_upper: 'Fuerza tren sup',
   strength_lower: 'Fuerza tren inf',
   strength_full: 'Fuerza full body',
+  mobility: 'Movilidad',
   // Triatlón / natación / ciclismo
   swim: 'Natación',
   swim_technique: 'Técnica natación',
@@ -58,6 +59,8 @@ const TYPE_TO_DISCIPLINE: Record<string, Discipline> = {
   strength_full: 'strength',
   hyrox_sim: 'strength',
   hyrox_stations: 'strength',
+  // Movilidad
+  mobility: 'mobility',
   // Descanso
   rest: 'rest',
 }
@@ -73,6 +76,7 @@ export const DISCIPLINE_ICONS: Record<Discipline, string> = {
   run: '🏃',
   brick: '🔁',
   strength: '🏋️',
+  mobility: '🧘',
   rest: '😴',
 }
 
@@ -82,6 +86,7 @@ export const DISCIPLINE_LABELS: Record<Discipline, string> = {
   run: 'Carrera',
   brick: 'Brick',
   strength: 'Fuerza',
+  mobility: 'Movilidad',
   rest: 'Descanso',
 }
 
@@ -136,6 +141,13 @@ export const DISCIPLINE_THEME: Record<Discipline, DisciplineTheme> = {
     accentText: 'text-gray-300',
     dot: 'bg-gray-400',
     chipBg: 'bg-gray-500/20 text-gray-300',
+  },
+  mobility: {
+    card: 'bg-teal-950/40 border-teal-800/50 text-teal-200',
+    accentBorder: 'border-l-teal-500',
+    accentText: 'text-teal-400',
+    dot: 'bg-teal-500',
+    chipBg: 'bg-teal-500/15 text-teal-300',
   },
   rest: {
     card: 'bg-gray-900/50 border-gray-800/60 text-gray-500',

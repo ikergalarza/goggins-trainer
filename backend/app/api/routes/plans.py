@@ -1,6 +1,7 @@
 """Rutas para planes de entrenamiento."""
 import json
 import logging
+import datetime as _dt
 from datetime import date
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -116,7 +117,11 @@ class WorkoutUpdate(BaseModel):
     planned_duration_min: Optional[int] = None
     planned_heart_rate_zone: Optional[str] = None
     instructions: Optional[str] = None
-    date: Optional[date] = None
+    # OJO: el campo se llama 'date' igual que el tipo datetime.date. Si se anota
+    # como Optional[date], Pydantic resuelve el nombre al propio campo (None) y
+    # rechaza cualquier fecha ("Input should be None") -> el PATCH de mover
+    # entrenos fallaba con 422. Usamos _dt.date (no se solapa con el nombre).
+    date: Optional[_dt.date] = None
 
 
 @router.patch("/workout/{workout_id}")

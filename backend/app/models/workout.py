@@ -26,6 +26,7 @@ class WorkoutType(str, enum.Enum):
     strength_lower = "strength_lower"
     strength_full = "strength_full"
     cross_training = "cross_training"
+    mobility = "mobility"                # movilidad / mobility / mobility-work
     # Triatlón / natación / ciclismo
     swim = "swim"                        # sesión de natación (piscina)
     bike = "bike"                        # salida de ciclismo

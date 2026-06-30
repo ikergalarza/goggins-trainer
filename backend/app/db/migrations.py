@@ -57,6 +57,7 @@ ENUM_VALUES_TO_ADD = [
             "strength_lower",
             "strength_full",
             "cross_training",
+            "mobility",
             "rest",
             # Triatlón / natación / ciclismo
             "swim",

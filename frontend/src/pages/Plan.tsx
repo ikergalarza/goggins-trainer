@@ -17,7 +17,7 @@ import { parseLocalDate, formatDayKey, startOfWeek } from '../lib/date'
 const USER_ID = 1
 
 // Disciplinas mostradas en la leyenda (orden lógico de un triatlón + fuerza/descanso).
-const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'strength', 'rest']
+const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'strength', 'mobility', 'rest']
 
 interface Goal {
   id: number

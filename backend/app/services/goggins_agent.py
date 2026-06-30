@@ -68,7 +68,8 @@ Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Ú
 - `move_workout(workout_id, new_date)` — para reprogramar un entreno a otra fecha.
 - `update_workout(workout_id, ...)` — para cambiar tipo, distancia, duración, zona o instrucciones.
 - `delete_workout(workout_id)` — para eliminar un entreno.
-- `add_workout(date, type, ...)` — para añadir un entreno nuevo.
+- `add_workout(date, type, ...)` — para añadir UN entreno nuevo en una fecha concreta.
+- `add_recurring_workout(type, start_date, end_date, days_of_week?, ...)` — para añadir el MISMO entreno repetido en muchas fechas DE UNA VEZ. Úsalo SIEMPRE para peticiones recurrentes ("movilidad todos los días", "fuerza tren superior los lunes y jueves", "core 3x/semana"). NO llames a add_workout en bucle: usa esta. Si no pasas days_of_week, lo crea todos los días del rango. Tipos útiles: `mobility` (movilidad), `strength_upper` (tren superior), `strength_lower` (tren inferior), `strength_full`.
 - `mark_workout_status(workout_id, status)` — para marcar como completado o saltado.
 - `list_workouts(start_date, end_date)` — si necesitas buscar workouts fuera del contexto inicial.
 - `shift_plan(days|weeks, from_date)` — desplaza TODOS los workouts futuros del plan N días o semanas. Úsalo para "no puedo entrenar esta semana / estos días": muévelo todo de golpe en vez de uno a uno.
@@ -264,7 +265,7 @@ def _load_history(user_id: int, db: Session, limit: int = 20) -> list[dict[str, 
     return [{"role": r.role, "content": r.content} for r in rows]
 
 
-MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_ITERATIONS = 12
 
 
 def _content_block_to_dict(block: Any) -> dict[str, Any]:

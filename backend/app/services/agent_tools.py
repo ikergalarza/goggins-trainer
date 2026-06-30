@@ -131,6 +131,37 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "add_recurring_workout",
+        "description": (
+            "Crea el MISMO workout repetido en MUCHAS fechas de una sola vez. "
+            "Úsalo SIEMPRE que el atleta pida algo recurrente en vez de llamar a "
+            "add_workout una y otra vez: 'mete movilidad todos los días', "
+            "'fuerza de tren superior los lunes y jueves', 'core 3 días/semana'. "
+            "Indica el rango (start_date/end_date) y, opcionalmente, los días de "
+            "la semana. Si no pasas days_of_week, lo crea TODOS los días del rango. "
+            "No duplica si ya existe un workout del mismo tipo ese día."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": VALID_TYPES},
+                "start_date": {"type": "string", "description": "Inicio del rango YYYY-MM-DD"},
+                "end_date": {"type": "string", "description": "Fin del rango YYYY-MM-DD (incluido)"},
+                "days_of_week": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 0, "maximum": 6},
+                    "description": "Días de la semana (0=lunes..6=domingo). Si se omite, TODOS los días.",
+                },
+                "distance_km": {"type": "number"},
+                "duration_min": {"type": "integer"},
+                "hr_zone": {"type": "string"},
+                "instructions": {"type": "string"},
+                "goal_id": {"type": "integer"},
+            },
+            "required": ["type", "start_date", "end_date"],
+        },
+    },
+    {
         "name": "mark_workout_status",
         "description": (
             "Marca un workout como planificado, completado o saltado. Usa "
@@ -673,12 +704,85 @@ def _tool_compare_planned_vs_actual(input: dict, user: User, db: Session) -> dic
     }
 
 
+_MAX_RECURRING = 200
+
+
+def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
+    type_str = input.get("type", "mobility")
+    if type_str not in VALID_TYPES:
+        return {"ok": False, "error": f"Tipo inválido: {type_str}"}
+    try:
+        start = _parse_date(input["start_date"])
+        end = _parse_date(input["end_date"])
+    except Exception as e:
+        return {"ok": False, "error": f"Fecha inválida: {e}"}
+    if end < start:
+        return {"ok": False, "error": "end_date debe ser >= start_date"}
+
+    dows = input.get("days_of_week")
+    if dows is not None:
+        try:
+            dows = {int(d) for d in dows}
+        except Exception:
+            return {"ok": False, "error": "days_of_week inválido"}
+
+    # Fechas objetivo que cumplen el patrón
+    target_dates: list[date] = []
+    d = start
+    while d <= end:
+        if dows is None or d.weekday() in dows:
+            target_dates.append(d)
+            if len(target_dates) > _MAX_RECURRING:
+                return {"ok": False, "error": f"Demasiados workouts (>{_MAX_RECURRING}). Acota el rango o los días."}
+        d += timedelta(days=1)
+    if not target_dates:
+        return {"ok": False, "error": "Ninguna fecha coincide con los días indicados"}
+
+    wtype = WorkoutType(type_str)
+    goal_id = input.get("goal_id")
+    # No duplicar si ya hay un workout del mismo tipo ese día
+    existing = {
+        (w.date, w.type)
+        for w in db.query(Workout).filter(
+            Workout.user_id == user.id,
+            Workout.date >= start,
+            Workout.date <= end,
+        ).all()
+    }
+    created = 0
+    for d in target_dates:
+        if (d, wtype) in existing:
+            continue
+        db.add(Workout(
+            user_id=user.id,
+            goal_id=goal_id,
+            date=d,
+            day_of_week=d.weekday(),
+            type=wtype,
+            status=WorkoutStatus.planned,
+            planned_distance_km=input.get("distance_km"),
+            planned_duration_min=input.get("duration_min"),
+            planned_heart_rate_zone=input.get("hr_zone"),
+            instructions=input.get("instructions"),
+            modified_by="user",
+        ))
+        created += 1
+    db.commit()
+    return {
+        "ok": True,
+        "mutation": "add_recurring_workout",
+        "created": created,
+        "summary": f"Añadidos {created} workouts '{type_str}' entre {start.isoformat()} y {end.isoformat()}",
+    }
+
+
 _DISPATCH = {
     "list_workouts": _tool_list_workouts,
     "move_workout": _tool_move_workout,
     "update_workout": _tool_update_workout,
     "delete_workout": _tool_delete_workout,
     "add_workout": _tool_add_workout,
+    "add_recurring_workout": _tool_add_recurring_workout,
     "mark_workout_status": _tool_mark_workout_status,
     "shift_plan": _tool_shift_plan,
     "adjust_week_load": _tool_adjust_week_load,
