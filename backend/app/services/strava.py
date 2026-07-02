@@ -19,7 +19,10 @@ def get_auth_url(user_id: int) -> str:
         "client_id": settings.STRAVA_CLIENT_ID,
         "redirect_uri": settings.STRAVA_REDIRECT_URI,
         "response_type": "code",
-        "approval_prompt": "auto",
+        # 'force' obliga a Strava a mostrar SIEMPRE la pantalla de consentimiento.
+        # Con 'auto', si ya habías autorizado con scope 'read', no re-pregunta y el
+        # nuevo scope 'activity:read_all' no se concede -> 403 al leer actividades.
+        "approval_prompt": "force",
         "scope": "read,activity:read_all",
         "state": str(user_id),
     }
