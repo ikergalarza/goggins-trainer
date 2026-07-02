@@ -125,16 +125,17 @@ def sync_strava(
         new_count = strava_service.sync_activities(user, db, pages=max_pages)
     except httpx.HTTPStatusError as e:
         code = e.response.status_code
-        logger.warning(f"[sync] Strava respondió {code}: {e}")
-        if code in (401, 403):
-            raise HTTPException(status_code=400, detail=(
-                "Strava rechazó el acceso a tus actividades (permiso o sesión caducada). "
-                "Ve a Perfil → Reconectar Strava y ACEPTA el permiso "
-                "'Ver datos de tus actividades' en la pantalla de Strava."
-            ))
+        try:
+            body = e.response.text[:400]
+        except Exception:
+            body = ""
+        logger.warning(f"[sync] Strava respondió {code}: {body}")
         if code == 429:
             raise HTTPException(status_code=429, detail="Strava está limitando por exceso de peticiones. Prueba en unos minutos.")
-        raise HTTPException(status_code=502, detail=f"Error de Strava ({code}).")
+        # Incluimos el detalle real de Strava para diagnosticar (scope vs restricción de API).
+        raise HTTPException(status_code=400, detail=(
+            f"Strava rechazó la sincronización (HTTP {code}). Respuesta de Strava: {body}"
+        ))
     except Exception as e:
         logger.exception(f"[sync] Error durante sync: {e}")
         raise HTTPException(status_code=500, detail=f"Error de Strava: {e}")
