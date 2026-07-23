@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '../api'
 import { useAuth } from '../auth/AuthContext'
+import DeleteButton from '../components/DeleteButton'
 
 interface Goal {
   id: number
@@ -291,7 +292,7 @@ export default function Goals() {
                 <p className="text-sm text-red-400 font-bold mt-0.5">{renderGoal(g)}</p>
                 {g.notes && <p className="text-xs text-gray-500 mt-1">{g.notes}</p>}
               </div>
-              <button onClick={() => handleDelete(g.id)} className="text-gray-600 hover:text-red-400 text-sm ml-4">✕</button>
+              <DeleteButton onDelete={() => handleDelete(g.id)} label={`Eliminar objetivo: ${g.description}`} />
             </div>
           ))}
         </div>

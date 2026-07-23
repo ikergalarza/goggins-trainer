@@ -15,7 +15,7 @@ from app.models.user import User
 from app.models.goal import Goal
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
-from app.services import ai_client
+from app.services import ai_client, record_labels
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def _build_context(user: User, db: Session) -> dict[str, Any]:
     records_list = []
     for r in records:
         entry = {
-            "category": r.category,
+            "category": record_labels.label_for(r.category),
             "date": r.date_achieved.isoformat() if r.date_achieved else None,
             "notes": r.notes,
         }

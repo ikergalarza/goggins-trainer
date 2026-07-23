@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import api, { API_BASE, authHeaders } from '../api'
 import { useAuth } from '../auth/AuthContext'
+import DictateButton from '../components/DictateButton'
 
 // Markdown inline minimalista: **bold**, *italic*, `code`. No depende de libs.
 function renderInline(text: string): ReactNode[] {
@@ -235,7 +236,8 @@ export default function Chat() {
         </div>
         <button
           onClick={handleClear}
-          className="bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-2 rounded-lg text-xs font-bold shrink-0"
+          aria-label="Borrar historial del chat"
+          className="shrink-0 min-h-11 min-w-11 flex items-center justify-center gap-1 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-gray-300 px-3 rounded-lg text-xs font-bold transition-colors"
         >
           🗑 <span className="hidden sm:inline">Borrar historial</span>
         </button>
@@ -256,7 +258,7 @@ export default function Chat() {
                 <button
                   key={s}
                   onClick={() => handleSend(s)}
-                  className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs px-3 py-2 rounded-full border border-gray-700"
+                  className="min-h-11 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-gray-300 text-xs px-4 rounded-full border border-gray-700 transition-colors"
                 >
                   {s}
                 </button>
@@ -322,15 +324,21 @@ export default function Chat() {
           type="text"
           value={input}
           onChange={e => setInput(e.target.value)}
-          placeholder="Escribe a Goggins..."
+          placeholder="Escribe o dicta a Goggins..."
           disabled={streaming}
           enterKeyHint="send"
-          className="flex-1 min-w-0 bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-base sm:text-sm placeholder:text-gray-600 focus:outline-none focus:border-red-700 disabled:opacity-50"
+          className="flex-1 min-w-0 min-h-11 bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-base sm:text-sm placeholder:text-gray-600 focus:outline-none focus:border-red-700 disabled:opacity-50"
+        />
+        <DictateButton
+          value={input}
+          onChange={setInput}
+          onError={setError}
+          disabled={streaming}
         />
         <button
           type="submit"
           disabled={streaming || !input.trim()}
-          className="bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white px-4 sm:px-6 py-3 rounded-xl text-sm font-bold transition-colors shrink-0"
+          className="shrink-0 min-h-11 bg-red-600 hover:bg-red-700 active:bg-red-800 disabled:opacity-40 text-white px-4 sm:px-6 rounded-xl text-sm font-bold transition-colors"
         >
           {streaming ? '⏳' : 'Enviar'}
         </button>

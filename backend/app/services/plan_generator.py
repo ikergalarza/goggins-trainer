@@ -17,7 +17,7 @@ from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
-from app.services import ai_client
+from app.services import ai_client, record_labels
 from app.services.triathlon import get_triathlon_distance
 
 logger = logging.getLogger(__name__)
@@ -253,12 +253,16 @@ def _build_context(user: User, goal: Goal, db: Session) -> dict[str, Any]:
     records = db.query(PersonalRecord).filter(PersonalRecord.user_id == user.id).all()
     records_list = []
     for r in records:
-        entry = {"category": r.category}
+        entry = {"category": record_labels.label_for(r.category)}
         if r.value_seconds:
             entry["time"] = _format_seconds(r.value_seconds)
         if r.value_numeric is not None:
             entry["value"] = r.value_numeric
             entry["unit"] = r.unit
+        if r.date_achieved:
+            entry["date"] = r.date_achieved.isoformat()
+        if r.notes:
+            entry["notes"] = r.notes
         records_list.append(entry)
 
     today = date.today()

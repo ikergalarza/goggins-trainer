@@ -21,7 +21,7 @@ from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
-from app.services import ai_client, agent_tools
+from app.services import ai_client, agent_tools, record_labels
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
     records = db.query(PersonalRecord).filter(PersonalRecord.user_id == user.id).all()
     records_list = []
     for r in records:
-        entry = {"category": r.category}
+        entry = {"category": record_labels.label_for(r.category)}
         if r.value_seconds:
             entry["time"] = _format_seconds(r.value_seconds)
         if r.value_numeric is not None:
@@ -147,6 +147,8 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             entry["unit"] = r.unit
         if r.date_achieved:
             entry["date"] = r.date_achieved.isoformat()
+        if r.notes:
+            entry["notes"] = r.notes
         records_list.append(entry)
 
     # Últimos 14 días de actividad

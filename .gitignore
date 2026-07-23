@@ -29,3 +29,6 @@ Thumbs.db
 
 # Railway
 .railway/
+
+# Serena (caché de la herramienta)
+.serena/
