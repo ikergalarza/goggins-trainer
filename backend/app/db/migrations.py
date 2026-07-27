@@ -75,6 +75,29 @@ ENUM_VALUES_TO_ADD = [
 ]
 
 
+# Sentencias DDL sueltas idempotentes (constraints, índices...).
+# Cada una debe poder ejecutarse en cada arranque sin error ni efecto duplicado.
+RAW_DDL = [
+    # strava_activities: pasar de UNIQUE(strava_id) global a UNIQUE(user_id, strava_id).
+    # La constraint vieja la generó SQLAlchemy con este nombre por defecto.
+    "ALTER TABLE strava_activities DROP CONSTRAINT IF EXISTS strava_activities_strava_id_key",
+    """
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'uq_strava_user_activity'
+        ) THEN
+            ALTER TABLE strava_activities
+                ADD CONSTRAINT uq_strava_user_activity UNIQUE (user_id, strava_id);
+        END IF;
+    END $$;
+    """,
+    # El modelo declara strava_id con index=True; en una BD ya existente
+    # create_all no lo crea, así que lo garantizamos aquí (modelo <-> BD).
+    "CREATE INDEX IF NOT EXISTS ix_strava_activities_strava_id ON strava_activities (strava_id)",
+]
+
+
 def ensure_schema(engine) -> None:
     """Añade columnas nuevas y valores a enums existentes (idempotente)."""
     # 1. Columnas nuevas
@@ -87,6 +110,16 @@ def ensure_schema(engine) -> None:
                 logger.info(f"[migrations] OK {table}.{column}")
             except Exception as e:
                 logger.warning(f"[migrations] {table}.{column} falló: {e}")
+
+    # 1b. DDL suelto (constraints/índices) idempotente. Cada sentencia en su
+    #     propia transacción: si una falla, no aborta ni contamina a las demás.
+    for stmt in RAW_DDL:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(stmt))
+            logger.info(f"[migrations] OK ddl: {stmt.strip().splitlines()[0][:60]}")
+        except Exception as e:
+            logger.warning(f"[migrations] ddl falló ({stmt.strip()[:60]}...): {e}")
 
     # 2. Valores de enum nuevos. ALTER TYPE ADD VALUE no puede ejecutarse en
     #    una transacción en algunas versiones de Postgres → usamos AUTOCOMMIT.

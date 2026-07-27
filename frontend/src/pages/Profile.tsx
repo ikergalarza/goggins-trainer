@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import api from '../api'
 import { useAuth } from '../auth/AuthContext'
+
+// Mensajes del resultado del callback de Strava (?strava=ok|error&reason=...).
+const STRAVA_CALLBACK_MSG: Record<string, { text: string; ok: boolean }> = {
+  ok: { text: 'Strava conectado correctamente ✅', ok: true },
+  cuenta_duplicada: { text: 'Esa cuenta de Strava ya está vinculada a otro usuario de la app.', ok: false },
+  state: { text: 'El enlace de conexión caducó. Pulsa "Conectar con Strava" otra vez.', ok: false },
+  cancelado: { text: 'Cancelaste la conexión con Strava.', ok: false },
+  usuario: { text: 'No se pudo identificar tu usuario. Vuelve a iniciar sesión.', ok: false },
+}
 
 interface ProfileData {
   id: number
@@ -42,12 +52,18 @@ function paceToMs(pace: string): number | null {
 }
 
 export default function Profile() {
-  const { effectiveUserId } = useAuth()
+  const { effectiveUserId, user, viewAs } = useAuth()
   const [profile, setProfile] = useState<ProfileData | null>(null)
   const [vamPace, setVamPace] = useState('')
   const [stravaConnected, setStravaConnected] = useState(false)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [stravaMsg, setStravaMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Solo puedes conectar TU propia cuenta de Strava, no la del usuario que el
+  // maestro esté impersonando.
+  const impersonating = viewAs != null
 
   useEffect(() => {
     if (effectiveUserId == null) return
@@ -58,14 +74,32 @@ export default function Profile() {
     api.get(`/api/strava/status/${effectiveUserId}`).then(r => setStravaConnected(r.data.connected)).catch(() => {})
   }, [effectiveUserId])
 
+  // Resultado del callback de Strava: ?strava=ok|error&reason=...
+  useEffect(() => {
+    const status = searchParams.get('strava')
+    if (!status) return
+    const reason = searchParams.get('reason') || ''
+    if (status === 'ok') {
+      setStravaMsg(STRAVA_CALLBACK_MSG.ok)
+      setStravaConnected(true)
+    } else {
+      setStravaMsg(STRAVA_CALLBACK_MSG[reason] || { text: 'No se pudo conectar con Strava. Inténtalo de nuevo.', ok: false })
+    }
+    // Limpia los parámetros para que no reaparezca el mensaje al recargar.
+    searchParams.delete('strava')
+    searchParams.delete('reason')
+    setSearchParams(searchParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
   const handleConnectStrava = async () => {
-    if (effectiveUserId == null) return
+    if (user == null) return
+    setStravaMsg(null)
     try {
-      // El endpoint exige token, así que pedimos la URL por axios y navegamos.
-      const r = await api.get(`/api/strava/auth?user_id=${effectiveUserId}`)
+      // Siempre sobre la cuenta propia (user.id), nunca la impersonada.
+      const r = await api.get(`/api/strava/auth?user_id=${user.id}`)
       window.location.href = r.data.url
     } catch {
-      setMsg({ text: 'No se pudo iniciar la conexión con Strava', ok: false })
+      setStravaMsg({ text: 'No se pudo iniciar la conexión con Strava', ok: false })
     }
   }
 
@@ -121,16 +155,28 @@ export default function Profile() {
               : 'Conecta tu cuenta para sincronizar actividades automáticamente.'}
           </p>
         </div>
-        <button
-          onClick={handleConnectStrava}
-          className={`${
-            stravaConnected
-              ? 'bg-gray-700 hover:bg-gray-600'
-              : 'bg-orange-500 hover:bg-orange-600'
-          } text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors`}
-        >
-          {stravaConnected ? 'Reconectar Strava' : 'Conectar con Strava'}
-        </button>
+
+        {stravaMsg && (
+          <p className={`text-sm ${stravaMsg.ok ? 'text-green-400' : 'text-red-400'}`}>{stravaMsg.text}</p>
+        )}
+
+        {impersonating ? (
+          <p className="text-sm text-yellow-500/90">
+            Estás viendo la app como otro usuario. La conexión de Strava solo puede hacerla cada
+            usuario desde su propia cuenta.
+          </p>
+        ) : (
+          <button
+            onClick={handleConnectStrava}
+            className={`${
+              stravaConnected
+                ? 'bg-gray-700 hover:bg-gray-600 active:bg-gray-500'
+                : 'bg-orange-500 hover:bg-orange-600 active:bg-orange-700'
+            } w-full sm:w-auto min-h-11 text-white px-5 rounded-lg text-sm font-medium transition-colors`}
+          >
+            {stravaConnected ? 'Reconectar Strava' : 'Conectar con Strava'}
+          </button>
+        )}
       </div>
 
       {/* Datos físicos */}

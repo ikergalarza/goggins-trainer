@@ -1,10 +1,13 @@
 import logging
 import time
+from urllib.parse import urlencode
 import httpx
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.user import User
 from app.models.strava_activity import StravaActivity
+from app.services import auth as auth_service
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +16,72 @@ STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
 STRAVA_API_BASE = "https://www.strava.com/api/v3"
 
 
+# --- Errores tipados ------------------------------------------------------
+# Distinguen la CAUSA para que la ruta pueda dar un mensaje y un status HTTP
+# correctos, en vez del volcado JSON crudo de Strava.
+class StravaError(Exception):
+    """Base de los errores de Strava."""
+
+
+class StravaNotConfigured(StravaError):
+    """Faltan STRAVA_CLIENT_ID/SECRET en el servidor."""
+
+
+class StravaAppInactive(StravaError):
+    """La aplicación registrada está Inactive (suscripción del dueño). Afecta a todos."""
+
+
+class StravaAuthError(StravaError):
+    """El token del usuario es inválido/caducado/revocado: hay que reconectar."""
+
+
+class StravaRateLimited(StravaError):
+    """Se ha superado el límite de peticiones de Strava."""
+
+
+def _classify_http_error(exc: httpx.HTTPStatusError) -> StravaError:
+    """Traduce un error HTTP de Strava a una excepción tipada mirando el cuerpo.
+
+    Strava usa 403 tanto para 'app inactiva' como (a veces) para rate limit, y
+    401 para token inválido. El cuerpo trae errors[].resource/field/code, que es
+    lo fiable; el status por sí solo no basta.
+    """
+    resp = exc.response
+    status = resp.status_code
+    body_text = ""
+    errors = []
+    try:
+        body_text = resp.text[:400]
+        payload = resp.json()
+        errors = payload.get("errors") or []
+    except Exception:
+        pass
+
+    def _has(field: str, code: str) -> bool:
+        return any(
+            (e.get("field") == field and e.get("code") == code) for e in errors
+        )
+
+    # Rate limit PRIMERO: Strava lo manda con resource="Application" (igual que
+    # app-inactive), así que hay que descartarlo antes de mirar la app.
+    if status == 429 or "rate limit" in body_text.lower() or _has("rate limit", "exceeded"):
+        return StravaRateLimited(body_text)
+
+    # App desactivada: {"resource":"Application","field":"Status","code":"Inactive"}.
+    # Señal ESPECÍFICA (field=Status / code=Inactive), no cualquier resource=Application.
+    if _has("Status", "Inactive") or any(e.get("code") == "Inactive" for e in errors):
+        return StravaAppInactive(body_text)
+
+    # Token inválido/caducado/revocado, o 403 por falta de scope (activity:read_all):
+    # en ambos casos el usuario tiene que reconectar.
+    if status in (400, 401, 403):
+        return StravaAuthError(body_text)
+
+    return StravaError(f"HTTP {status}: {body_text}")
+
+
 def get_auth_url(user_id: int) -> str:
-    """Genera la URL de autorización de Strava."""
+    """Genera la URL de autorización de Strava con un `state` firmado."""
     params = {
         "client_id": settings.STRAVA_CLIENT_ID,
         "redirect_uri": settings.STRAVA_REDIRECT_URI,
@@ -24,10 +91,11 @@ def get_auth_url(user_id: int) -> str:
         # nuevo scope 'activity:read_all' no se concede -> 403 al leer actividades.
         "approval_prompt": "force",
         "scope": "read,activity:read_all",
-        "state": str(user_id),
+        # `state` firmado (no el user_id en claro): impide que alguien fuerce
+        # state=<otro_id> y vincule su Strava a la cuenta de otro usuario.
+        "state": auth_service.create_state_token(user_id),
     }
-    query = "&".join(f"{k}={v}" for k, v in params.items())
-    return f"{STRAVA_AUTH_URL}?{query}"
+    return f"{STRAVA_AUTH_URL}?{urlencode(params)}"
 
 
 def exchange_code(code: str) -> dict:
@@ -45,41 +113,67 @@ def exchange_code(code: str) -> dict:
     return response.json()
 
 
+def _clear_tokens(user: User, db: Session) -> None:
+    """Borra la conexión de Strava del usuario (tokens muertos)."""
+    user.strava_access_token = None
+    user.strava_refresh_token = None
+    user.strava_token_expires_at = None
+    db.add(user)
+    db.commit()
+
+
 def refresh_token(user: User, db: Session) -> User:
-    """Refresca el access token si ha expirado.
-    Si no hay client_id/secret configurados, usa el token actual tal cual."""
+    """Refresca el access token si está a punto de expirar.
+
+    Lanza excepciones tipadas en lugar de devolver un token muerto en silencio.
+    """
     now = int(time.time())
     logger.info(f"[refresh_token] user={user.id}, expires_at={user.strava_token_expires_at}, now={now}")
 
-    # Si el token no ha expirado, no hacemos nada
-    if user.strava_token_expires_at and user.strava_token_expires_at > time.time():
+    # Margen de 60 s: no dar por válido un token que caduca dentro de segundos.
+    if user.strava_token_expires_at and user.strava_token_expires_at > now + 60:
         logger.info("[refresh_token] Token aún válido, no se refresca")
         return user
 
-    # Si no tenemos credenciales de la app Strava, no podemos refrescar
     if not settings.STRAVA_CLIENT_ID or not settings.STRAVA_CLIENT_SECRET:
-        logger.warning("[refresh_token] No hay STRAVA_CLIENT_ID/SECRET, usando token actual")
-        return user  # usar el token actual y esperar que funcione
+        logger.error("[refresh_token] Falta STRAVA_CLIENT_ID/SECRET en el servidor")
+        raise StravaNotConfigured("Strava no está configurado en el servidor")
 
     if not user.strava_refresh_token:
         logger.warning("[refresh_token] No hay refresh_token guardado")
-        return user
+        raise StravaAuthError("No hay refresh_token; hay que reconectar")
 
-    response = httpx.post(
-        STRAVA_TOKEN_URL,
-        data={
-            "client_id": settings.STRAVA_CLIENT_ID,
-            "client_secret": settings.STRAVA_CLIENT_SECRET,
-            "grant_type": "refresh_token",
-            "refresh_token": user.strava_refresh_token,
-        },
-    )
-    response.raise_for_status()
+    try:
+        response = httpx.post(
+            STRAVA_TOKEN_URL,
+            data={
+                "client_id": settings.STRAVA_CLIENT_ID,
+                "client_secret": settings.STRAVA_CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": user.strava_refresh_token,
+            },
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        err = _classify_http_error(e)
+        # Si el refresh token ya no vale, la conexión está muerta: la limpiamos
+        # para que el perfil deje de mostrar "conectado" y el usuario reconecte.
+        if isinstance(err, StravaAuthError):
+            logger.warning(f"[refresh_token] refresh inválido para user={user.id}, limpiando tokens")
+            _clear_tokens(user, db)
+        raise err
+
     data = response.json()
+    access = data.get("access_token")
+    refresh = data.get("refresh_token")
+    expires = data.get("expires_at")
+    if not access or not refresh:
+        logger.error(f"[refresh_token] respuesta de Strava sin tokens: {str(data)[:200]}")
+        raise StravaAuthError("Respuesta de refresco inválida; hay que reconectar")
 
-    user.strava_access_token = data["access_token"]
-    user.strava_refresh_token = data["refresh_token"]
-    user.strava_token_expires_at = data["expires_at"]
+    user.strava_access_token = access
+    user.strava_refresh_token = refresh
+    user.strava_token_expires_at = expires
     db.add(user)
     db.commit()
     return user
@@ -169,7 +263,9 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
         try:
             activities = fetch_activities(user.strava_access_token, per_page=50, page=page)
         except httpx.HTTPStatusError as e:
-            logger.error(f"[sync_activities] HTTP error al obtener actividades: {e.response.status_code} - {e.response.text[:500]}")
+            logger.error(f"[sync_activities] HTTP {e.response.status_code}: {e.response.text[:500]}")
+            raise _classify_http_error(e)
+        except StravaError:
             raise
         except Exception as e:
             logger.error(f"[sync_activities] Error inesperado: {type(e).__name__}: {e}")
@@ -182,7 +278,13 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
         logger.info(f"[sync_activities] Página {page}: {len(activities)} actividades")
         for act in activities:
             strava_id = act["id"]
-            exists = db.query(StravaActivity).filter_by(strava_id=strava_id).first()
+            # Dedup POR USUARIO: una misma actividad puede existir para otro
+            # usuario sin bloquear la del dueño legítimo.
+            exists = (
+                db.query(StravaActivity)
+                .filter_by(user_id=user.id, strava_id=strava_id)
+                .first()
+            )
             if exists:
                 continue
 
@@ -202,7 +304,15 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
                 start_date=act.get("start_date"),
                 raw_data=act,
             )
-            db.add(record)
+            # SAVEPOINT por inserción: si otra sincronización solapada del mismo
+            # usuario ya metió esta actividad, el UNIQUE(user_id, strava_id)
+            # salta aquí y solo descartamos esta fila, sin tumbar la página.
+            try:
+                with db.begin_nested():
+                    db.add(record)
+            except IntegrityError:
+                logger.info(f"[sync_activities] {strava_id} ya existía (carrera), se omite")
+                continue
             new_count += 1
 
         db.commit()

@@ -1,14 +1,26 @@
 import logging
 import time
+from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.db.database import get_db
 from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.services import strava as strava_service
+from app.services import auth as auth_service
+
+
+def _frontend_redirect(status: str, reason: str = "") -> RedirectResponse:
+    """Redirección al frontend (Perfil) con el resultado del OAuth."""
+    params = {"strava": status}
+    if reason:
+        params["reason"] = reason
+    return RedirectResponse(url=f"{settings.frontend_base}/profile?{urlencode(params)}", status_code=302)
 
 logger = logging.getLogger(__name__)
 
@@ -23,81 +35,116 @@ class TokenInput(BaseModel):
 
 @router.post("/tokens/{user_id}")
 def set_tokens(user_id: int, body: TokenInput, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Guarda los tokens de Strava directamente.
-    Si el usuario no existe, lo crea automáticamente."""
+    """Guarda tokens de Strava ya obtenidos (uso manual/depuración).
+
+    Solo persiste si el token verifica contra Strava; si no, no deja al usuario
+    marcado como conectado con credenciales inválidas.
+    """
     authorize_user(user_id, current)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        user = User(id=user_id, name="Atleta", email=f"user{user_id}@goggins.local")
-        db.add(user)
-        db.flush()
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Verificar ANTES de persistir.
+    try:
+        athlete = strava_service.fetch_athlete(body.access_token)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"El token no es válido para Strava: {e}")
+
+    athlete_id = str(athlete.get("id") or "") or None
+    if athlete_id:
+        clash = (
+            db.query(User)
+            .filter(User.strava_athlete_id == athlete_id, User.id != user_id)
+            .first()
+        )
+        if clash:
+            raise HTTPException(status_code=409, detail="Esa cuenta de Strava ya está vinculada a otro usuario.")
 
     user.strava_access_token = body.access_token
     user.strava_refresh_token = body.refresh_token
-    # Si no se pasa expires_at, asumimos que el token es válido 6h
     user.strava_token_expires_at = body.expires_at if body.expires_at > 0 else int(time.time()) + 21600
+    user.strava_athlete_id = athlete_id
 
-    # Verificar que el token funciona
-    athlete_name = None
     try:
-        athlete = strava_service.fetch_athlete(body.access_token)
-        user.strava_athlete_id = str(athlete.get("id", ""))
-        athlete_name = athlete.get("firstname", "")
-    except Exception as e:
         db.add(user)
         db.commit()
-        return {
-            "message": "Tokens guardados pero no se pudo verificar con Strava",
-            "warning": str(e),
-        }
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Esa cuenta de Strava ya está vinculada a otro usuario.")
 
-    db.add(user)
-    db.commit()
-
-    return {
-        "message": f"Conectado como {athlete_name}",
-        "athlete": athlete_name,
-    }
+    return {"message": f"Conectado como {athlete.get('firstname', '')}", "athlete": athlete.get("firstname", "")}
 
 
 @router.get("/auth")
 def strava_auth(user_id: int = Query(...), current: User = Depends(get_current_user)):
-    authorize_user(user_id, current)
+    # La conexión de Strava es siempre sobre la cuenta propia: nadie (ni el
+    # maestro) puede autorizar en Strava en nombre de otro usuario.
+    if user_id != current.id:
+        raise HTTPException(status_code=403, detail="Solo puedes conectar tu propia cuenta de Strava.")
     # Devolvemos la URL como JSON (en vez de redirigir) para que el frontend
     # pueda pedirla con el token Bearer y luego navegar manualmente a Strava.
-    url = strava_service.get_auth_url(user_id)
-    return {"url": url}
+    return {"url": strava_service.get_auth_url(current.id)}
 
 
 @router.get("/callback")
 def strava_callback(
-    code: str = Query(...),
-    state: str = Query(...),
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
     db: Session = Depends(get_db),
 ):
-    user_id = int(state)
+    # El usuario puede haber cancelado en la pantalla de Strava.
+    if error:
+        logger.info(f"[callback] Strava devolvió error={error}")
+        return _frontend_redirect("error", "cancelado")
+
+    # El `state` firmado ES la identidad: si no valida, no seguimos.
+    user_id = auth_service.decode_state_token(state)
+    if user_id is None:
+        logger.warning("[callback] state inválido o caducado")
+        return _frontend_redirect("error", "state")
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        user = User(id=user_id, name="Atleta", email=f"user{user_id}@goggins.local")
-        db.add(user)
-        db.flush()
+        logger.warning(f"[callback] usuario {user_id} no existe")
+        return _frontend_redirect("error", "usuario")
 
     try:
         token_data = strava_service.exchange_code(code)
     except Exception as e:
         logger.exception(f"[callback] Error al intercambiar código: {e}")
-        raise HTTPException(status_code=400, detail=f"Error al obtener tokens: {e}")
+        return _frontend_redirect("error", "intercambio")
 
-    athlete = token_data.get("athlete", {})
-    user.strava_athlete_id = str(athlete.get("id", ""))
-    user.strava_access_token = token_data["access_token"]
-    user.strava_refresh_token = token_data["refresh_token"]
-    user.strava_token_expires_at = token_data["expires_at"]
+    athlete = token_data.get("athlete") or {}
+    athlete_id = str(athlete.get("id") or "") or None
 
-    db.add(user)
-    db.commit()
+    # Impedir vincular la misma cuenta de Strava a dos usuarios distintos.
+    if athlete_id:
+        clash = (
+            db.query(User)
+            .filter(User.strava_athlete_id == athlete_id, User.id != user_id)
+            .first()
+        )
+        if clash:
+            logger.warning(f"[callback] athlete {athlete_id} ya vinculado a user={clash.id}")
+            return _frontend_redirect("error", "cuenta_duplicada")
+
+    user.strava_athlete_id = athlete_id
+    user.strava_access_token = token_data.get("access_token")
+    user.strava_refresh_token = token_data.get("refresh_token")
+    user.strava_token_expires_at = token_data.get("expires_at")
+
+    try:
+        db.add(user)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.warning(f"[callback] IntegrityError al vincular athlete {athlete_id}")
+        return _frontend_redirect("error", "cuenta_duplicada")
+
     logger.info(f"[callback] Strava conectado para user={user_id}, athlete={athlete.get('firstname')}")
-    return RedirectResponse(url="/")
+    return _frontend_redirect("ok")
 
 
 @router.post("/sync/{user_id}")
@@ -117,28 +164,41 @@ def sync_strava(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if not user.strava_access_token:
         logger.error(f"[sync] Usuario {user_id} sin token de Strava")
-        raise HTTPException(status_code=400, detail="No hay token de Strava. Ve a Perfil y conecta.")
+        raise HTTPException(status_code=409, detail="No hay conexión con Strava. Ve a Perfil y conéctala.")
 
     logger.info(f"[sync] Usuario encontrado: {user.name}, athlete_id={user.strava_athlete_id}")
 
     try:
         new_count = strava_service.sync_activities(user, db, pages=max_pages)
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code
-        try:
-            body = e.response.text[:400]
-        except Exception:
-            body = ""
-        logger.warning(f"[sync] Strava respondió {code}: {body}")
-        if code == 429:
-            raise HTTPException(status_code=429, detail="Strava está limitando por exceso de peticiones. Prueba en unos minutos.")
-        # Incluimos el detalle real de Strava para diagnosticar (scope vs restricción de API).
-        raise HTTPException(status_code=400, detail=(
-            f"Strava rechazó la sincronización (HTTP {code}). Respuesta de Strava: {body}"
+    except strava_service.StravaNotConfigured:
+        logger.error("[sync] Strava no configurado en el servidor")
+        raise HTTPException(status_code=503, detail="Strava no está configurado en el servidor. Avisa al administrador.")
+    except strava_service.StravaAppInactive:
+        # No es un fallo del usuario: la app de desarrollador está desactivada.
+        logger.warning("[sync] Strava Application Inactive")
+        raise HTTPException(status_code=403, detail=(
+            "La aplicación de Strava está desactivada ahora mismo. Es un problema de la "
+            "cuenta de desarrollador (Strava exige suscripción activa), no de tu cuenta. "
+            "Reactívala en strava.com/settings/api."
         ))
+    except strava_service.StravaAuthError:
+        logger.warning("[sync] token de Strava inválido/caducado")
+        raise HTTPException(status_code=409, detail=(
+            "Tu conexión con Strava ha caducado o le faltan permisos. Vuelve a conectarla en Perfil."
+        ))
+    except strava_service.StravaRateLimited:
+        raise HTTPException(status_code=429, detail="Demasiadas peticiones a Strava. Reinténtalo en unos minutos.")
+    except httpx.HTTPStatusError as e:
+        body = ""
+        try:
+            body = e.response.text[:300]
+        except Exception:
+            pass
+        logger.warning(f"[sync] HTTP {e.response.status_code}: {body}")
+        raise HTTPException(status_code=502, detail="Strava no respondió correctamente. Reinténtalo en un momento.")
     except Exception as e:
         logger.exception(f"[sync] Error durante sync: {e}")
-        raise HTTPException(status_code=500, detail=f"Error de Strava: {e}")
+        raise HTTPException(status_code=500, detail=f"Error inesperado al sincronizar: {e}")
 
     # Empareja con workouts planificados (best-effort, no rompe la sync si falla)
     matched = 0
@@ -232,13 +292,21 @@ def get_activity_detail(
 
     if detail is None or refresh:
         if not user.strava_access_token:
-            raise HTTPException(status_code=400, detail="Sin token de Strava")
+            raise HTTPException(status_code=409, detail="No hay conexión con Strava. Conéctala en Perfil.")
         try:
             user = strava_service.refresh_token(user, db)
             full = strava_service.fetch_activity_full(user.strava_access_token, activity.strava_id)
+        except strava_service.StravaNotConfigured:
+            raise HTTPException(status_code=503, detail="Strava no está configurado en el servidor.")
+        except strava_service.StravaAppInactive:
+            raise HTTPException(status_code=403, detail="La aplicación de Strava está desactivada ahora mismo (cuenta de desarrollador).")
+        except strava_service.StravaAuthError:
+            raise HTTPException(status_code=409, detail="Tu conexión con Strava ha caducado. Vuelve a conectarla en Perfil.")
+        except strava_service.StravaRateLimited:
+            raise HTTPException(status_code=429, detail="Demasiadas peticiones a Strava. Reinténtalo en unos minutos.")
         except Exception as e:
             logger.exception(f"[activity] fetch_activity_full falló: {e}")
-            raise HTTPException(status_code=502, detail=f"Error de Strava: {e}")
+            raise HTTPException(status_code=502, detail="Strava no respondió correctamente. Reinténtalo en un momento.")
 
         try:
             streams = strava_service.fetch_activity_streams(user.strava_access_token, activity.strava_id)

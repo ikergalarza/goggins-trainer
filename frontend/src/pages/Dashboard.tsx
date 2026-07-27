@@ -28,7 +28,7 @@ export default function Dashboard() {
   const [activities, setActivities] = useState<Activity[]>([])
   const [stravaConnected, setStravaConnected] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean; reconnect?: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState<any>(null)
   const [insight, setInsight] = useState<any>(null)
@@ -91,10 +91,19 @@ export default function Dashboard() {
       const syncRes = await api.post(url)
       const r = await api.get(`/api/strava/activities/${effectiveUserId}?limit=5`)
       setActivities(r.data)
-      setSyncMsg({ text: `Sincronización OK: ${syncRes.data.new_activities} nuevas actividades`, ok: true })
+      const n = syncRes.data.new_activities ?? 0
+      setSyncMsg({
+        text: n > 0
+          ? `Listo: ${n} actividad${n === 1 ? '' : 'es'} nueva${n === 1 ? '' : 's'}.`
+          : 'Ya estaba todo al día.',
+        ok: true,
+      })
     } catch (e: any) {
-      const detail = e?.response?.data?.detail || e?.message || 'Error desconocido'
-      setSyncMsg({ text: `Error: ${detail}`, ok: false })
+      const status = e?.response?.status
+      const raw = e?.response?.data?.detail
+      const detail = typeof raw === 'string' ? raw : (e?.message || 'No se pudo sincronizar.')
+      // 409 = conexión caducada / sin permisos → ofrecer reconectar.
+      setSyncMsg({ text: detail, ok: false, reconnect: status === 409 })
       console.error('Sync error:', e?.response?.data || e)
     } finally {
       setSyncing(false)
@@ -112,26 +121,27 @@ export default function Dashboard() {
           <p className="text-gray-500 text-sm mt-1">No excuses. No days off.</p>
         </div>
         {stravaConnected ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-col items-stretch sm:items-end gap-2">
             <button
               onClick={() => handleSync(false)}
               disabled={syncing}
-              className="flex items-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-900/40"
+              className="flex items-center justify-center gap-2 min-h-11 bg-red-600 hover:bg-red-700 active:bg-red-800 disabled:opacity-50 text-white px-5 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-900/40"
             >
-              {syncing ? '⏳ Sincronizando...' : '🔄 Sincronizar'}
+              {syncing ? '⏳ Sincronizando…' : '🔄 Sincronizar'}
             </button>
+            {/* Acción secundaria: solo hace falta la primera vez o tras un parón. */}
             <button
               onClick={() => handleSync(true)}
               disabled={syncing}
-              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+              className="flex items-center justify-center gap-1.5 min-h-11 sm:min-h-0 sm:py-1 border border-gray-800 sm:border-0 text-gray-500 hover:text-gray-300 active:text-gray-200 disabled:opacity-50 px-4 rounded-lg text-xs font-medium transition-colors"
             >
-              📥 Todo el historial
+              📥 Importar todo el historial
             </button>
           </div>
         ) : (
           <Link
             to="/profile"
-            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-900/40"
+            className="flex items-center justify-center gap-2 min-h-11 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white px-5 rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-900/40"
           >
             ⚡ Conectar Strava
           </Link>
@@ -139,7 +149,17 @@ export default function Dashboard() {
       </div>
 
       {syncMsg && (
-        <p className={`text-sm ${syncMsg.ok ? 'text-green-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+        <div className="space-y-2">
+          <p className={`text-sm ${syncMsg.ok ? 'text-green-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+          {syncMsg.reconnect && (
+            <Link
+              to="/profile"
+              className="inline-flex items-center justify-center min-h-11 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white px-4 rounded-lg text-sm font-bold transition-colors"
+            >
+              Reconectar Strava
+            </Link>
+          )}
+        </div>
       )}
 
       {/* Stats */}

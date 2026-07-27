@@ -7,6 +7,16 @@ class Settings(BaseSettings):
     STRAVA_CLIENT_ID: str = ""
     STRAVA_CLIENT_SECRET: str = ""
     STRAVA_REDIRECT_URI: str = "https://goggins-trainer-production.up.railway.app/api/strava/callback"
+    # Base del frontend a la que vuelve el callback de Strava. Si no se define,
+    # se deriva del redirect_uri (mismo origen que sirve el SPA en Railway).
+    FRONTEND_URL: str = ""
+
+    @property
+    def frontend_base(self) -> str:
+        if self.FRONTEND_URL:
+            return self.FRONTEND_URL.rstrip("/")
+        # https://host/api/strava/callback -> https://host
+        return self.STRAVA_REDIRECT_URI.split("/api/strava/callback")[0].rstrip("/")
 
     # Auth / JWT. En producción (Railway) define JWT_SECRET como variable de entorno.
     JWT_SECRET: str = "dev-insecure-secret-change-me"
