@@ -215,3 +215,113 @@ def match_strava(user_id: int, current: User = Depends(get_current_user), db: Se
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     matched = plan_generator.match_strava_to_workouts(user, db)
     return {"matched": matched}
+
+
+# --- Vincular / desvincular a mano y ver lo de fuera del plan ---------------
+
+class LinkBody(BaseModel):
+    strava_id: int
+
+
+def _serialize_activity_brief(a) -> dict:
+    return {
+        "strava_id": a.strava_id,
+        "name": a.name,
+        "type": a.type,
+        "distance_km": round(a.distance_m / 1000, 2) if a.distance_m else None,
+        "moving_time_min": round(a.moving_time_s / 60) if a.moving_time_s else None,
+        "average_heartrate": a.average_heartrate,
+        "start_date": a.start_date.isoformat() if a.start_date else None,
+    }
+
+
+@router.post("/workout/{workout_id}/link")
+def link_workout(workout_id: int, body: LinkBody, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Engancha a mano una actividad de Strava a un workout (aunque sea de otro día).
+
+    Es la corrección manual cuando el emparejador automático no acierta o el
+    entreno se hizo otro día. Copia distancia/tiempo/FC reales y marca completado.
+    """
+    from app.models.strava_activity import StravaActivity
+
+    workout = db.query(Workout).filter(Workout.id == workout_id).first()
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout no encontrado")
+    authorize_user(workout.user_id, current)
+
+    activity = (
+        db.query(StravaActivity)
+        .filter(StravaActivity.user_id == workout.user_id, StravaActivity.strava_id == body.strava_id)
+        .first()
+    )
+    if not activity:
+        raise HTTPException(status_code=404, detail="Actividad de Strava no encontrada")
+
+    # Una actividad solo puede cerrar un workout: si estaba en otro, lo soltamos.
+    prev = (
+        db.query(Workout)
+        .filter(Workout.user_id == workout.user_id, Workout.strava_activity_id == str(activity.strava_id), Workout.id != workout.id)
+        .first()
+    )
+    if prev:
+        prev.strava_activity_id = None
+        prev.actual_distance_km = None
+        prev.actual_duration_min = None
+        prev.actual_avg_heart_rate = None
+        prev.actual_max_heart_rate = None
+        prev.status = WorkoutStatus.planned
+        db.add(prev)
+
+    was_completed = workout.status == WorkoutStatus.completed
+    plan_generator._apply_activity_to_workout(workout, activity)
+    workout.modified_by = "user"
+    db.add(workout)
+    db.commit()
+    db.refresh(workout)
+
+    if not was_completed:
+        try:
+            from app.services import workout_feedback
+            workout_feedback.generate_for_completed(current, [workout], db)
+        except Exception as e:
+            logger.warning(f"[plans] feedback de completado falló: {e}")
+
+    return _serialize_workout(workout)
+
+
+@router.delete("/workout/{workout_id}/link")
+def unlink_workout(workout_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Desvincula la actividad de Strava del workout y lo devuelve a planificado."""
+    workout = db.query(Workout).filter(Workout.id == workout_id).first()
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout no encontrado")
+    authorize_user(workout.user_id, current)
+
+    workout.strava_activity_id = None
+    workout.actual_distance_km = None
+    workout.actual_duration_min = None
+    workout.actual_avg_heart_rate = None
+    workout.actual_max_heart_rate = None
+    workout.status = WorkoutStatus.planned
+    workout.modified_by = "user"
+    db.add(workout)
+    db.commit()
+    db.refresh(workout)
+    return _serialize_workout(workout)
+
+
+@router.get("/unlinked/{user_id}")
+def unlinked(
+    user_id: int,
+    days: int = Query(default=60, ge=1, le=365),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Actividades de Strava sin workout: lo que se hizo fuera del plan."""
+    authorize_user(user_id, current)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    since = date.today() - _dt.timedelta(days=days)
+    acts = plan_generator.unlinked_activities(user, db, since=since)
+    return [_serialize_activity_brief(a) for a in acts]

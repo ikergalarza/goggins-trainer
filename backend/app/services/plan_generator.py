@@ -540,13 +540,41 @@ def generate_plan(user: User, goal: Goal, db: Session) -> dict[str, Any]:
     return final
 
 
-def match_strava_to_workouts(user: User, db: Session) -> int:
-    """Empareja actividades de Strava con workouts planificados del mismo día.
+def _linked_strava_ids(user: User, db: Session) -> set[str]:
+    """strava_ids ya enganchados a algún workout del usuario (no se reutilizan)."""
+    rows = (
+        db.query(Workout.strava_activity_id)
+        .filter(Workout.user_id == user.id, Workout.strava_activity_id.isnot(None))
+        .all()
+    )
+    return {r[0] for r in rows if r[0]}
 
-    Para cada workout planificado sin strava_activity_id, busca una actividad
-    del usuario en la misma fecha y la enlaza, marcando el workout como
-    completado y guardando datos reales.
+
+def _apply_activity_to_workout(w: Workout, activity: StravaActivity) -> None:
+    """Copia los datos reales de la actividad al workout y lo marca completado."""
+    w.strava_activity_id = str(activity.strava_id)
+    w.actual_distance_km = round((activity.distance_m or 0) / 1000, 2) if activity.distance_m else None
+    w.actual_duration_min = round((activity.moving_time_s or 0) / 60) if activity.moving_time_s else None
+    w.actual_avg_heart_rate = int(activity.average_heartrate) if activity.average_heartrate else None
+    w.actual_max_heart_rate = int(activity.max_heartrate) if activity.max_heartrate else None
+    w.status = WorkoutStatus.completed
+
+
+def match_strava_to_workouts(user: User, db: Session) -> int:
+    """Empareja actividades de Strava con workouts planificados, por disciplina.
+
+    Reglas:
+    - Solo se empareja dentro del mismo día (UTC) y del MISMO deporte: una
+      carrera no cierra una sesión de movilidad; un brick acepta bici o carrera.
+    - Cada actividad se usa como mucho una vez (ni dos workouts con la misma
+      actividad, ni actividades ya vinculadas a mano).
+    - Si un día hay varias candidatas del mismo deporte, se asigna la más
+      larga al workout con más distancia planificada (y así sucesivamente).
+    - Si no hay nada del mismo deporte ese día, el workout se queda planificado:
+      mejor vacío que mal.
     """
+    from app.services.discipline import activity_matches_workout
+
     workouts = (
         db.query(Workout)
         .filter(
@@ -556,34 +584,53 @@ def match_strava_to_workouts(user: User, db: Session) -> int:
         )
         .all()
     )
+    if not workouts:
+        return 0
+
+    used = _linked_strava_ids(user, db)
+
+    # Agrupar workouts por día para repartir las actividades de ese día.
+    by_day: dict[date, list[Workout]] = {}
+    for w in workouts:
+        if w.date:
+            by_day.setdefault(w.date, []).append(w)
+
     matched = 0
     newly_completed: list[Workout] = []
-    for w in workouts:
-        if not w.date:
-            continue
-        # Rango UTC del día
-        start = datetime.combine(w.date, datetime.min.time(), tzinfo=timezone.utc)
+    for day, day_workouts in by_day.items():
+        start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
         end = start + timedelta(days=1)
-        activity = (
+        candidates = (
             db.query(StravaActivity)
             .filter(
                 StravaActivity.user_id == user.id,
                 StravaActivity.start_date >= start,
                 StravaActivity.start_date < end,
             )
-            .order_by(StravaActivity.distance_m.desc())
-            .first()
+            .order_by(StravaActivity.distance_m.desc().nullslast())
+            .all()
         )
-        if not activity:
+        candidates = [a for a in candidates if str(a.strava_id) not in used]
+        if not candidates:
             continue
-        w.strava_activity_id = str(activity.strava_id)
-        w.actual_distance_km = round((activity.distance_m or 0) / 1000, 2) if activity.distance_m else None
-        w.actual_duration_min = round((activity.moving_time_s or 0) / 60) if activity.moving_time_s else None
-        w.actual_avg_heart_rate = int(activity.average_heartrate) if activity.average_heartrate else None
-        w.actual_max_heart_rate = int(activity.max_heartrate) if activity.max_heartrate else None
-        w.status = WorkoutStatus.completed
-        newly_completed.append(w)
-        matched += 1
+
+        # Workouts con más distancia planificada primero: la tirada larga se
+        # lleva la actividad más larga, no la serie corta.
+        day_workouts.sort(key=lambda w: (w.planned_distance_km or 0), reverse=True)
+        for w in day_workouts:
+            pick = None
+            for a in candidates:
+                if activity_matches_workout(a.type, w.type):
+                    pick = a
+                    break
+            if pick is None:
+                continue
+            candidates.remove(pick)
+            used.add(str(pick.strava_id))
+            _apply_activity_to_workout(w, pick)
+            newly_completed.append(w)
+            matched += 1
+
     if matched:
         db.commit()
         # Feedback automático de Goggins para los recién completados (import
@@ -593,5 +640,25 @@ def match_strava_to_workouts(user: User, db: Session) -> int:
             workout_feedback.generate_for_completed(user, newly_completed, db)
         except Exception as e:
             logger.warning(f"[plan_generator] feedback de completado falló: {e}")
-    logger.info(f"[plan_generator] Empareados {matched} workouts con Strava")
+    logger.info(f"[plan_generator] Emparejados {matched} workouts con Strava")
     return matched
+
+
+def unlinked_activities(user: User, db: Session, since: date | None = None, limit: int = 200) -> list[StravaActivity]:
+    """Actividades de Strava que NO están enganchadas a ningún workout.
+
+    Es lo que el usuario ha hecho fuera del plan (o lo que el emparejador no
+    ha sabido colocar). Si `since` es None, últimos 60 días.
+    """
+    if since is None:
+        since = date.today() - timedelta(days=60)
+    start = datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)
+    used = _linked_strava_ids(user, db)
+    rows = (
+        db.query(StravaActivity)
+        .filter(StravaActivity.user_id == user.id, StravaActivity.start_date >= start)
+        .order_by(StravaActivity.start_date.desc())
+        .limit(limit * 2)
+        .all()
+    )
+    return [a for a in rows if str(a.strava_id) not in used][:limit]

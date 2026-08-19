@@ -48,6 +48,17 @@ interface Workout {
   strava_activity_id: string | null
 }
 
+// Actividad de Strava sin workout (lo hecho fuera del plan) — /api/plans/unlinked
+interface UnlinkedActivity {
+  strava_id: number
+  name: string | null
+  type: string | null
+  distance_km: number | null
+  moving_time_min: number | null
+  average_heartrate: number | null
+  start_date: string | null
+}
+
 const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 
 // Los helpers de fecha (parseLocalDate / formatDayKey / startOfWeek) viven en
@@ -66,6 +77,12 @@ export default function Plan() {
   const [streamChars, setStreamChars] = useState(0)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [selectedWorkout, setSelectedWorkout] = useState<Workout | null>(null)
+  // Actividades de Strava sin emparejar (para "Fuera del plan" y para vincular a mano).
+  const [unlinked, setUnlinked] = useState<UnlinkedActivity[]>([])
+  const [linking, setLinking] = useState(false)
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false)
+  // El selector de vincular se cierra al cambiar de entreno en el modal.
+  useEffect(() => { setLinkPickerOpen(false) }, [selectedWorkout?.id])
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
   // Semanas PASADAS expandidas manualmente por el usuario (clave = lunes 'YYYY-MM-DD').
@@ -83,6 +100,14 @@ export default function Plan() {
       .catch(() => {})
   }, [effectiveUserId])
 
+  // Lo hecho fuera del plan: actividades de Strava sin workout (últimos 60 días).
+  const fetchUnlinked = () => {
+    if (effectiveUserId == null) return
+    api.get(`/api/plans/unlinked/${effectiveUserId}?days=60`)
+      .then(r => setUnlinked(r.data))
+      .catch(() => setUnlinked([]))
+  }
+
   const fetchWorkouts = (goalId: number | null) => {
     if (effectiveUserId == null) return
     setLoading(true)
@@ -93,6 +118,7 @@ export default function Plan() {
       .then(r => setWorkouts(r.data))
       .catch(() => setWorkouts([]))
       .finally(() => setLoading(false))
+    fetchUnlinked()
   }
 
   useEffect(() => {
@@ -221,6 +247,39 @@ export default function Plan() {
       if (selectedGoalId) fetchWorkouts(selectedGoalId)
     } catch (e: any) {
       setMsg({ text: `Error: ${e?.response?.data?.detail || e?.message}`, ok: false })
+    }
+  }
+
+  // Vincular a mano una actividad de Strava al workout abierto en el modal.
+  const linkActivity = async (workoutId: number, stravaId: number) => {
+    setLinking(true)
+    try {
+      const r = await api.post(`/api/plans/workout/${workoutId}/link`, { strava_id: stravaId })
+      setWorkouts(ws => ws.map(w => (w.id === workoutId ? r.data : w)))
+      setSelectedWorkout(r.data)
+      setLinkPickerOpen(false)
+      fetchUnlinked()
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setMsg({ text: `No se pudo vincular: ${err?.response?.data?.detail || err?.message}`, ok: false })
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  const unlinkActivity = async (workoutId: number) => {
+    if (!confirm('¿Desvincular esta actividad de Strava? El entreno volverá a planificado.')) return
+    setLinking(true)
+    try {
+      const r = await api.delete(`/api/plans/workout/${workoutId}/link`)
+      setWorkouts(ws => ws.map(w => (w.id === workoutId ? r.data : w)))
+      setSelectedWorkout(r.data)
+      fetchUnlinked()
+    } catch (e) {
+      const err = e as { response?: { data?: { detail?: string } }; message?: string }
+      setMsg({ text: `No se pudo desvincular: ${err?.response?.data?.detail || err?.message}`, ok: false })
+    } finally {
+      setLinking(false)
     }
   }
 
@@ -544,6 +603,39 @@ export default function Plan() {
       )}
 
       {/* Modal detalle workout */}
+      {/* Lo que has hecho y no estaba en el plan (actividades de Strava sin workout) */}
+      {unlinked.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <div className="flex items-baseline justify-between gap-2 mb-3">
+            <h3 className="text-sm font-bold text-gray-300">🧭 Fuera del plan</h3>
+            <span className="text-xs text-gray-500">{unlinked.length} actividad{unlinked.length === 1 ? '' : 'es'} · últimos 60 días</span>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            Actividades de Strava que no están vinculadas a ningún entreno. Para contarlas, abre el entreno correspondiente y pulsa «Vincular».
+          </p>
+          <div className="divide-y divide-gray-800/60">
+            {unlinked.slice(0, 8).map(a => (
+              <div key={a.strava_id} className="flex items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate">{a.name || a.type}</p>
+                  <p className="text-xs text-gray-500">
+                    {a.start_date && new Date(a.start_date).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    {a.type && ` · ${a.type}`}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right text-sm">
+                  {a.distance_km != null && <p className="font-bold text-gray-200">{a.distance_km} km</p>}
+                  {a.moving_time_min != null && <p className="text-xs text-gray-500">{a.moving_time_min}'</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {unlinked.length > 8 && (
+            <p className="text-xs text-gray-600 mt-2">…y {unlinked.length - 8} más en Actividades.</p>
+          )}
+        </div>
+      )}
+
       {selectedWorkout && (
         <div
           className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
@@ -667,13 +759,85 @@ export default function Plan() {
               )
             })()}
 
-            {selectedWorkout.actual_distance_km != null && (
+            {/* Actividad de Strava vinculada (datos reales) + desvincular */}
+            {selectedWorkout.strava_activity_id ? (
               <div className="bg-green-900/20 border border-green-900/40 rounded-lg p-3">
-                <p className="text-xs text-green-400 uppercase font-bold mb-1">✓ Completado (Strava)</p>
-                <p className="text-sm text-gray-300">
-                  {selectedWorkout.actual_distance_km} km · {selectedWorkout.actual_duration_min}'
-                  {selectedWorkout.actual_avg_heart_rate && ` · ${selectedWorkout.actual_avg_heart_rate} bpm`}
-                </p>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs text-green-400 uppercase font-bold mb-1">✓ Completado (Strava)</p>
+                    <p className="text-sm text-gray-300">
+                      {selectedWorkout.actual_distance_km != null && `${selectedWorkout.actual_distance_km} km`}
+                      {selectedWorkout.actual_duration_min != null && ` · ${selectedWorkout.actual_duration_min}'`}
+                      {selectedWorkout.actual_avg_heart_rate && ` · ${selectedWorkout.actual_avg_heart_rate} bpm`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => unlinkActivity(selectedWorkout.id)}
+                    disabled={linking}
+                    className="shrink-0 min-h-11 px-3 rounded-lg text-xs font-semibold text-gray-400 hover:text-white hover:bg-gray-800 active:bg-gray-700 disabled:opacity-50 transition-colors"
+                  >
+                    Desvincular
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-gray-800/40 border border-gray-800 rounded-lg p-3 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setLinkPickerOpen(o => !o)}
+                  aria-expanded={linkPickerOpen}
+                  className="w-full min-h-11 flex items-center justify-between text-sm font-semibold text-gray-300 hover:text-white active:text-white transition-colors"
+                >
+                  <span>🔗 Vincular actividad de Strava</span>
+                  <span className="text-gray-500">{linkPickerOpen ? '▾' : '▸'}</span>
+                </button>
+                {linkPickerOpen && (() => {
+                  // Candidatas: sin emparejar y a ±3 días del entreno (el día real
+                  // puede no coincidir con el planificado). Las del mismo deporte primero.
+                  const target = parseLocalDate(selectedWorkout.date).getTime()
+                  const DAY = 86400000
+                  const disc = disciplineOf(selectedWorkout.type)
+                  const sameSport = (t: string | null) => {
+                    const x = (t || '').toLowerCase()
+                    if (disc === 'run') return x.includes('run')
+                    if (disc === 'swim') return x.includes('swim')
+                    if (disc === 'bike') return x.includes('ride') || x.includes('bike')
+                    if (disc === 'brick') return x.includes('ride') || x.includes('run')
+                    return true
+                  }
+                  const cands = unlinked
+                    .filter(a => a.start_date && Math.abs(new Date(a.start_date).getTime() - target) <= 3 * DAY)
+                    .sort((a, b) => Number(sameSport(b.type)) - Number(sameSport(a.type)))
+                  if (cands.length === 0) {
+                    return <p className="text-xs text-gray-500">No hay actividades sin emparejar a ±3 días. Sincroniza Strava primero.</p>
+                  }
+                  return (
+                    <div className="space-y-1 max-h-56 overflow-y-auto">
+                      {cands.map(a => (
+                        <button
+                          key={a.strava_id}
+                          type="button"
+                          disabled={linking}
+                          onClick={() => linkActivity(selectedWorkout.id, a.strava_id)}
+                          className={`w-full min-h-11 text-left px-3 py-2 rounded-lg border transition-colors disabled:opacity-50 ${
+                            sameSport(a.type)
+                              ? 'border-gray-700 bg-gray-900 hover:bg-gray-800 active:bg-gray-700'
+                              : 'border-gray-800/60 bg-gray-900/50 text-gray-500 hover:bg-gray-800/60'
+                          }`}
+                        >
+                          <p className="text-sm font-semibold truncate">{a.name || a.type}</p>
+                          <p className="text-xs text-gray-500">
+                            {a.start_date && new Date(a.start_date).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}
+                            {a.type && ` · ${a.type}`}
+                            {a.distance_km != null && ` · ${a.distance_km} km`}
+                            {a.moving_time_min != null && ` · ${a.moving_time_min}'`}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
