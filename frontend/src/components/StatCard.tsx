@@ -13,6 +13,11 @@ export default function StatCard({ label, value, unit, sub, color = 'red' }: Sta
     green: 'text-green-400',
     yellow: 'text-yellow-400',
     purple: 'text-purple-400',
+    // Acentos por disciplina (natación=blue, bici=green, carrera=orange,
+    // fuerza=gray, otro=violet), coherentes con las gráficas apiladas.
+    orange: 'text-orange-400',
+    gray: 'text-gray-400',
+    violet: 'text-violet-400',
   }
   return (
     <div className="bg-gray-900 border border-gray-800 hover:border-red-900/60 rounded-xl p-5 transition-colors">

@@ -13,6 +13,7 @@ from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.services import strava as strava_service
 from app.services import auth as auth_service
+from app.services.discipline import DISCIPLINES, discipline_for_strava_type
 
 
 def _frontend_redirect(status: str, reason: str = "") -> RedirectResponse:
@@ -407,6 +408,21 @@ def weekly_stats(
         .all()
     )
 
+    def _empty_bucket(key: str) -> dict:
+        return {
+            "week_start": key,
+            "km": 0.0,
+            "time_min": 0.0,
+            "activities": 0,
+            "elevation_m": 0.0,
+            "hr_sum": 0.0,
+            "hr_count": 0,
+            # Desglose por disciplina: sin él, los km de bici, carrera y
+            # natación se mezclan en un solo número y la fuerza (sin km)
+            # directamente desaparece.
+            "disciplines": {d: {"km": 0.0, "min": 0.0, "n": 0} for d in DISCIPLINES},
+        }
+
     # Agrupar por lunes de la semana (ISO week starts Monday)
     buckets: dict[str, dict] = {}
     for a in activities:
@@ -421,15 +437,7 @@ def weekly_stats(
         # Lunes de la semana
         monday = dt - timedelta(days=dt.weekday())
         key = monday.strftime("%Y-%m-%d")
-        b = buckets.setdefault(key, {
-            "week_start": key,
-            "km": 0.0,
-            "time_min": 0.0,
-            "activities": 0,
-            "elevation_m": 0.0,
-            "hr_sum": 0.0,
-            "hr_count": 0,
-        })
+        b = buckets.setdefault(key, _empty_bucket(key))
         b["km"] += (a.distance_m or 0) / 1000
         b["time_min"] += (a.moving_time_s or 0) / 60
         b["activities"] += 1
@@ -437,6 +445,10 @@ def weekly_stats(
         if a.average_heartrate:
             b["hr_sum"] += a.average_heartrate
             b["hr_count"] += 1
+        d = b["disciplines"][discipline_for_strava_type(a.type)]
+        d["km"] += (a.distance_m or 0) / 1000
+        d["min"] += (a.moving_time_s or 0) / 60
+        d["n"] += 1
 
     # Asegurar que las últimas `weeks` semanas existen aunque estén vacías
     now = datetime.now(timezone.utc)
@@ -444,15 +456,7 @@ def weekly_stats(
     for i in range(weeks):
         monday = current_monday - timedelta(weeks=i)
         key = monday.strftime("%Y-%m-%d")
-        buckets.setdefault(key, {
-            "week_start": key,
-            "km": 0.0,
-            "time_min": 0.0,
-            "activities": 0,
-            "elevation_m": 0.0,
-            "hr_sum": 0.0,
-            "hr_count": 0,
-        })
+        buckets.setdefault(key, _empty_bucket(key))
 
     # Ordenar ascendente por fecha
     result = []
@@ -465,6 +469,12 @@ def weekly_stats(
             "activities": int(b["activities"]),
             "elevation_m": round(b["elevation_m"]),
             "avg_hr": round(b["hr_sum"] / b["hr_count"]) if b["hr_count"] > 0 else None,
+            # Solo disciplinas con actividad: no engordamos el JSON con ceros.
+            "disciplines": {
+                name: {"km": round(d["km"], 1), "min": round(d["min"]), "n": int(d["n"])}
+                for name, d in b["disciplines"].items()
+                if d["n"] > 0
+            },
         })
 
     # Limitamos al número pedido (por si hay más)

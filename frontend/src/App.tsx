@@ -12,6 +12,7 @@ import Profile from './pages/Profile'
 import Records from './pages/Records'
 import Plan from './pages/Plan'
 import Chat from './pages/Chat'
+import Social from './pages/Social'
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
@@ -41,6 +42,7 @@ export default function App() {
           <Route path="records" element={<Records />} />
           <Route path="activities" element={<Activities />} />
           <Route path="activities/:activityId" element={<ActivityDetail />} />
+          <Route path="social" element={<Social />} />
           <Route path="profile" element={<Profile />} />
           <Route path="admin" element={<RequireMaster><Admin /></RequireMaster>} />
         </Route>

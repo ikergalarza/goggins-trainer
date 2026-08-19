@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import api from '../api'
 import { useAuth } from '../auth/AuthContext'
 
@@ -52,7 +52,7 @@ function paceToMs(pace: string): number | null {
 }
 
 export default function Profile() {
-  const { effectiveUserId, user, viewAs } = useAuth()
+  const { effectiveUserId, user, viewAs, isMaster, logout } = useAuth()
   const [profile, setProfile] = useState<ProfileData | null>(null)
   const [vamPace, setVamPace] = useState('')
   const [stravaConnected, setStravaConnected] = useState(false)
@@ -179,6 +179,39 @@ export default function Profile() {
         )}
       </div>
 
+      {/* Accesos: Marcas y Objetivos viven aquí desde que salieron de la nav principal */}
+      <div className="grid grid-cols-2 gap-3">
+        <Link
+          to="/records"
+          className="min-h-11 bg-gray-900 border border-gray-800 hover:border-red-900/60 active:bg-gray-800 rounded-xl p-4 transition-colors"
+        >
+          <p className="text-2xl">🏆</p>
+          <p className="font-semibold mt-1">Marcas</p>
+          <p className="text-xs text-gray-500 mt-0.5">Tus mejores tiempos por prueba</p>
+        </Link>
+        <Link
+          to="/goals"
+          className="min-h-11 bg-gray-900 border border-gray-800 hover:border-red-900/60 active:bg-gray-800 rounded-xl p-4 transition-colors"
+        >
+          <p className="text-2xl">🎯</p>
+          <p className="font-semibold mt-1">Objetivos</p>
+          <p className="text-xs text-gray-500 mt-0.5">Las pruebas que estás preparando</p>
+        </Link>
+        {/* En móvil ya no hay menú con Admin: el maestro entra desde aquí */}
+        {isMaster && (
+          <Link
+            to="/admin"
+            className="col-span-2 min-h-11 bg-gray-900 border border-gray-800 hover:border-red-900/60 active:bg-gray-800 rounded-xl p-4 flex items-center gap-3 transition-colors"
+          >
+            <span className="text-2xl">🛡️</span>
+            <span>
+              <span className="block font-semibold">Admin</span>
+              <span className="block text-xs text-gray-500 mt-0.5">Gestión de usuarios del grupo</span>
+            </span>
+          </Link>
+        )}
+      </div>
+
       {/* Datos físicos */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
         <h2 className="font-semibold">Datos físicos</h2>
@@ -265,6 +298,16 @@ export default function Profile() {
       >
         {saving ? 'Guardando...' : '💾 Guardar perfil'}
       </button>
+
+      {/* Cerrar sesión: en móvil ya no existe el menú hamburguesa, así que vive aquí */}
+      <div className="border-t border-gray-800 pt-6">
+        <button
+          onClick={logout}
+          className="w-full sm:w-auto min-h-11 bg-gray-900 border border-gray-800 hover:bg-gray-800 active:bg-gray-700 text-gray-400 px-5 rounded-lg text-sm transition-colors"
+        >
+          ⎋ Cerrar sesión{user?.email ? ` (${user.email})` : ''}
+        </button>
+      </div>
     </div>
   )
 }

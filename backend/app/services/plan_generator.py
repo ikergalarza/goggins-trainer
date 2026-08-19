@@ -18,6 +18,7 @@ from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.services import ai_client, record_labels
+from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
 
 logger = logging.getLogger(__name__)
@@ -135,17 +136,12 @@ def _discipline_for_strava_type(strava_type: str | None) -> str | None:
     """Mapea el `type` de una actividad de Strava a una disciplina de triatlón.
 
     Devuelve 'swim' | 'bike' | 'run' | None (None = no relevante para triatlón).
+    Delega en el mapeo general de `services.discipline` y descarta fuerza y
+    otros deportes, porque `_build_discipline_volume` solo mide el volumen de
+    las tres disciplinas del triatlón.
     """
-    if not strava_type:
-        return None
-    t = strava_type.lower()
-    if "swim" in t:
-        return "swim"
-    if t in ("run", "trailrun", "virtualrun") or "run" in t:
-        return "run"
-    if t in ("ride", "virtualride", "ebikeride", "gravelride", "mountainbikeride") or "ride" in t or "bike" in t:
-        return "bike"
-    return None
+    d = discipline_for_strava_type(strava_type)
+    return d if d in ("swim", "bike", "run") else None
 
 
 # Defaults conservadores (nivel principiante) por disciplina cuando no hay datos

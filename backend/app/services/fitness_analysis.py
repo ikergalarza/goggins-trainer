@@ -16,6 +16,7 @@ from app.models.goal import Goal
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.services import ai_client, record_labels
+from app.services.discipline import discipline_for_strava_type
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +90,20 @@ def _build_context(user: User, db: Session) -> dict[str, Any]:
         except Exception:
             continue
         week_key = dt.strftime("%Y-W%V")
-        w = weekly.setdefault(week_key, {"km": 0.0, "time_min": 0.0, "activities": 0, "hr_sum": 0.0, "hr_count": 0})
+        w = weekly.setdefault(week_key, {"km": 0.0, "time_min": 0.0, "activities": 0, "hr_sum": 0.0, "hr_count": 0, "disciplines": {}})
         w["km"] += (a.distance_m or 0) / 1000
         w["time_min"] += (a.moving_time_s or 0) / 60
         w["activities"] += 1
         if a.average_heartrate:
             w["hr_sum"] += a.average_heartrate
             w["hr_count"] += 1
+        # Desglose por disciplina: sin él la IA vería un total que mezcla
+        # km de bici, carrera y natación (y perdería la fuerza, sin km).
+        disc = discipline_for_strava_type(a.type)
+        d = w["disciplines"].setdefault(disc, {"km": 0.0, "min": 0.0, "n": 0})
+        d["km"] += (a.distance_m or 0) / 1000
+        d["min"] += (a.moving_time_s or 0) / 60
+        d["n"] += 1
 
         if len(recent_list) < 30:  # últimas 30 para detalle
             recent_list.append({
@@ -119,6 +127,12 @@ def _build_context(user: User, db: Session) -> dict[str, Any]:
             "time_min": round(data["time_min"]),
             "activities": int(data["activities"]),
             "avg_hr": avg_hr,
+            # Solo disciplinas con datos, para no engordar el prompt.
+            "disciplines": {
+                name: {"km": round(d["km"], 1), "min": round(d["min"]), "n": int(d["n"])}
+                for name, d in data["disciplines"].items()
+                if d["n"] > 0
+            },
         })
 
     # Marcas

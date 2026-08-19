@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import api from '../api'
 import { useAuth } from '../auth/AuthContext'
 import DeleteButton from '../components/DeleteButton'
@@ -155,6 +156,14 @@ export default function Goals() {
 
   return (
     <div className="space-y-6">
+      {/* Vuelta a Perfil, que es desde donde se llega a esta página */}
+      <Link
+        to="/profile"
+        className="inline-flex items-center min-h-11 text-sm text-gray-400 hover:text-white active:text-white transition-colors"
+      >
+        ← Perfil
+      </Link>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">🎯 Objetivos</h1>

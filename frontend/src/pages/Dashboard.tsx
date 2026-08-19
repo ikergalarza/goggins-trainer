@@ -13,6 +13,16 @@ const HR_ZONES_META = [
   { zone: 'Z5', label: 'VO2 Max', color: 'bg-red-500' },
 ]
 
+// Disciplinas con sus colores (coherentes con el Plan). El orden fija el
+// apilado de las barras y el de las tarjetas.
+const DISCIPLINE_META = [
+  { key: 'swim', label: 'Natación', icon: '🏊', chartColor: '#3b82f6', cardColor: 'blue' },
+  { key: 'bike', label: 'Bici', icon: '🚴', chartColor: '#22c55e', cardColor: 'green' },
+  { key: 'run', label: 'Carrera', icon: '🏃', chartColor: '#f97316', cardColor: 'orange' },
+  { key: 'strength', label: 'Fuerza', icon: '🏋️', chartColor: '#9ca3af', cardColor: 'gray' },
+  { key: 'other', label: 'Otro', icon: '🎯', chartColor: '#a78bfa', cardColor: 'violet' },
+]
+
 interface Activity {
   id: number
   name: string
@@ -21,6 +31,23 @@ interface Activity {
   moving_time_min: number
   average_heartrate: number
   start_date: string
+}
+
+interface DisciplineStat {
+  km: number
+  min: number
+  n: number
+}
+
+interface WeekStat {
+  week_start: string
+  km: number
+  time_min: number
+  activities: number
+  elevation_m: number
+  avg_hr: number | null
+  // Desglose por disciplina; el backend omite las que no tienen actividad.
+  disciplines?: Record<string, DisciplineStat>
 }
 
 export default function Dashboard() {
@@ -34,7 +61,7 @@ export default function Dashboard() {
   const [insight, setInsight] = useState<any>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
-  const [weeklyStats, setWeeklyStats] = useState<any[]>([])
+  const [weeklyStats, setWeeklyStats] = useState<WeekStat[]>([])
   const [chartWeeks, setChartWeeks] = useState(12)
 
   useEffect(() => {
@@ -81,6 +108,23 @@ export default function Dashboard() {
 
   const total12wKm = weeklyStats.reduce((s, w) => s + w.km, 0)
   const total12wMin = weeklyStats.reduce((s, w) => s + w.time_min, 0)
+
+  // Semana en curso y disciplinas con actividad en las últimas 12 semanas:
+  // solo esas merecen tarjeta (aunque sea una sola).
+  const currentWeek = weeklyStats.length > 0 ? weeklyStats[weeklyStats.length - 1] : null
+  const activeDisciplines = DISCIPLINE_META.filter(m =>
+    weeklyStats.slice(-12).some(w => (w.disciplines?.[m.key]?.n ?? 0) > 0)
+  )
+
+  // Series de las gráficas apiladas sobre TODO el rango cargado:
+  // km → disciplinas que suman distancia (la fuerza aporta ~0 km y no sale);
+  // min → todas las que suman tiempo (ahí es donde la fuerza se ve).
+  const kmSeries = DISCIPLINE_META
+    .filter(m => weeklyStats.some(w => (w.disciplines?.[m.key]?.km ?? 0) > 0))
+    .map(m => ({ key: m.key, label: `${m.icon} ${m.label}`, color: m.chartColor }))
+  const minSeries = DISCIPLINE_META
+    .filter(m => weeklyStats.some(w => (w.disciplines?.[m.key]?.min ?? 0) > 0))
+    .map(m => ({ key: m.key, label: `${m.icon} ${m.label}`, color: m.chartColor }))
 
   const handleSync = async (syncAll = false) => {
     if (effectiveUserId == null) return
@@ -162,9 +206,46 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Km esta semana" value={weeklyKm.toFixed(1)} unit="km" color="red" />
+      {/* Stats: la semana en curso, separada por disciplina */}
+      <div>
+        <h2 className="text-xs text-gray-500 uppercase tracking-wider font-bold mb-3">Esta semana</h2>
+        {activeDisciplines.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {activeDisciplines.map(m => {
+              const d = currentWeek?.disciplines?.[m.key]
+              const sesiones = d?.n ?? 0
+              // La fuerza no tiene km: se mide en sesiones y minutos.
+              return m.key === 'strength' ? (
+                <StatCard
+                  key={m.key}
+                  label={`${m.icon} ${m.label}`}
+                  value={sesiones}
+                  unit={sesiones === 1 ? 'sesión' : 'sesiones'}
+                  sub={`${d?.min ?? 0} min`}
+                  color={m.cardColor}
+                />
+              ) : (
+                <StatCard
+                  key={m.key}
+                  label={`${m.icon} ${m.label}`}
+                  value={(d?.km ?? 0).toFixed(1)}
+                  unit="km"
+                  sub={`${d?.min ?? 0} min · ${sesiones} ses.`}
+                  color={m.cardColor}
+                />
+              )
+            })}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Sin desglose todavía (sin actividades sincronizadas): total de siempre. */}
+            <StatCard label="Km esta semana" value={weeklyKm.toFixed(1)} unit="km" color="red" />
+          </div>
+        )}
+      </div>
+
+      {/* Stats: agregados del rango cargado */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <StatCard label="Media 4 sem" value={avg4wKm.toFixed(1)} unit="km/sem" color="blue" />
         <StatCard label="Total 12 sem" value={total12wKm.toFixed(0)} unit="km" color="green" />
         <StatCard label="Tiempo 12 sem" value={(total12wMin / 60).toFixed(0)} unit="horas" color="purple" />
@@ -179,10 +260,10 @@ export default function Dashboard() {
               <button
                 key={n}
                 onClick={() => setChartWeeks(n)}
-                className={`px-3 py-1 rounded text-xs font-bold transition-colors ${
+                className={`min-h-11 sm:min-h-0 sm:py-1 px-3 rounded text-xs font-bold transition-colors ${
                   chartWeeks === n
                     ? 'bg-red-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 active:bg-gray-600'
                 }`}
               >
                 {n}s
@@ -195,30 +276,36 @@ export default function Dashboard() {
           <p className="text-sm text-gray-600">Sin datos todavía. Sincroniza Strava.</p>
         ) : (
           <div className="space-y-8">
+            {/* Apilada por disciplina: la fuerza aporta ~0 km y no aparece aquí. */}
             <WeeklyChart
               title="Kilómetros / semana"
               data={weeklyStats.map(w => ({
                 label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
                 date: w.week_start,
                 value: w.km,
+                parts: Object.fromEntries(kmSeries.map(s => [s.key, w.disciplines?.[s.key]?.km ?? 0])),
               }))}
               unit=" km"
               barColor="#ef4444"
               lineColor="#38bdf8"
+              series={kmSeries}
               movingAverageWindow={4}
               height={300}
             />
 
+            {/* En minutos entran TODAS las disciplinas: aquí es donde se ve la fuerza. */}
             <WeeklyChart
               title="Minutos / semana"
               data={weeklyStats.map(w => ({
                 label: new Date(w.week_start).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
                 date: w.week_start,
                 value: w.time_min,
+                parts: Object.fromEntries(minSeries.map(s => [s.key, w.disciplines?.[s.key]?.min ?? 0])),
               }))}
               unit=" min"
               barColor="#3b82f6"
               lineColor="#fbbf24"
+              series={minSeries}
               movingAverageWindow={4}
               height={240}
             />

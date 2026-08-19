@@ -68,6 +68,9 @@ export default function Plan() {
   const [selectedWorkout, setSelectedWorkout] = useState<Workout | null>(null)
   const [draggingId, setDraggingId] = useState<number | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+  // Semanas PASADAS expandidas manualmente por el usuario (clave = lunes 'YYYY-MM-DD').
+  // La semana actual y las futuras van siempre expandidas y no pasan por aquí.
+  const [expandedPastWeeks, setExpandedPastWeeks] = useState<Set<string>>(new Set())
 
   // Carga inicial (y al cambiar de usuario "ver como")
   useEffect(() => {
@@ -243,6 +246,16 @@ export default function Plan() {
     updateWorkout(id, { date: targetDateKey })
   }
 
+  // Pliega/despliega una semana pasada (solo presentación; no toca datos ni drag&drop)
+  const togglePastWeek = (weekStart: string) => {
+    setExpandedPastWeeks(prev => {
+      const next = new Set(prev)
+      if (next.has(weekStart)) next.delete(weekStart)
+      else next.add(weekStart)
+      return next
+    })
+  }
+
   // Agrupa workouts por semana (lunes)
   const weeks = useMemo(() => {
     if (workouts.length === 0) return []
@@ -261,6 +274,10 @@ export default function Plan() {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([key, items]) => ({ weekStart: key, items }))
   }, [workouts])
+
+  // Lunes de la semana de HOY como clave 'YYYY-MM-DD'. Comparar estas claves como
+  // strings es cronológicamente correcto (orden lexicográfico = orden de fechas).
+  const currentWeekKey = formatDayKey(startOfWeek(new Date()))
 
   const selectedGoal = goals.find(g => g.id === selectedGoalId) || null
 
@@ -366,20 +383,129 @@ export default function Plan() {
 
       {loading && <p className="text-sm text-gray-500">Cargando...</p>}
 
-      {/* Calendario semanal */}
+      {/* Calendario semanal: pasadas plegadas en gris, actual destacada, futuras completas */}
       {weeks.length > 0 && (
         <div className="space-y-4">
           {weeks.map((wk, idx) => {
             // wk.weekStart es 'YYYY-MM-DD'; parsear LOCAL para no desfasar el día
             const monday = parseLocalDate(wk.weekStart)
+            // Clasificación temporal de la semana respecto al lunes de HOY
+            const isPast = wk.weekStart < currentWeekKey
+            const isCurrent = wk.weekStart === currentWeekKey
+            const isExpanded = !isPast || expandedPastWeeks.has(wk.weekStart)
+
+            // Grid de 7 días. Solo se construye si la semana está expandida:
+            // las pasadas plegadas no montan su grid (menos DOM en móvil).
+            const dayGrid = isExpanded ? (
+              <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+                {DAY_NAMES.map((dn, i) => {
+                  const dayDate = new Date(monday)
+                  dayDate.setDate(dayDate.getDate() + i)
+                  const dayKey = formatDayKey(dayDate)
+                  const workoutsToday = wk.items.filter(w => w.date === dayKey)
+                  const isToday = formatDayKey(new Date()) === dayKey
+                  const isDragOver = dragOverKey === dayKey
+                  return (
+                    <div
+                      key={i}
+                      onDragOver={e => {
+                        if (draggingId != null) {
+                          e.preventDefault()
+                          if (dragOverKey !== dayKey) setDragOverKey(dayKey)
+                        }
+                      }}
+                      onDragLeave={() => {
+                        if (dragOverKey === dayKey) setDragOverKey(null)
+                      }}
+                      onDrop={e => {
+                        e.preventDefault()
+                        handleDropOnDay(dayKey)
+                      }}
+                      className={`flex md:block gap-3 md:gap-0 rounded-lg p-2 min-h-[52px] md:min-h-[90px] transition-colors ${
+                        isDragOver
+                          ? 'border-2 border-red-400 bg-red-950/30'
+                          : isToday
+                            ? 'border-2 border-red-500/60 bg-gray-950'
+                            : 'bg-gray-950/60 border border-gray-800'
+                      }`}
+                    >
+                      <div className={`text-[10px] uppercase font-bold mb-0 md:mb-1 shrink-0 w-12 md:w-auto ${isToday ? 'text-red-400' : 'text-gray-500'}`}>
+                        {dn} {dayDate.getDate()}
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        {workoutsToday.map(w => (
+                          <WorkoutCard
+                            key={w.id}
+                            workout={w}
+                            isDragging={draggingId === w.id}
+                            onClick={() => setSelectedWorkout(w)}
+                            onDragStart={e => {
+                              setDraggingId(w.id)
+                              e.dataTransfer.effectAllowed = 'move'
+                              // Algunos navegadores requieren setData para iniciar el drag
+                              try { e.dataTransfer.setData('text/plain', String(w.id)) } catch { /* noop */ }
+                            }}
+                            onDragEnd={() => {
+                              setDraggingId(null)
+                              setDragOverKey(null)
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null
+
+            // Semanas PASADAS: fila compacta gris apilada; se expande/pliega al pulsar
+            if (isPast) {
+              const completedCount = wk.items.filter(w => w.status === 'completed').length
+              const totalKm = wk.items.reduce((sum, w) => sum + (w.planned_distance_km || 0), 0)
+              return (
+                <div key={wk.weekStart} className="bg-gray-900/50 border border-gray-800/60 rounded-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => togglePastWeek(wk.weekStart)}
+                    aria-expanded={isExpanded}
+                    aria-label={`${isExpanded ? 'Plegar' : 'Desplegar'} semana ${idx + 1}`}
+                    className="w-full min-h-11 px-4 py-2 flex items-center justify-between gap-2 text-left text-gray-500 hover:bg-gray-800/40 active:bg-gray-800/60 transition-colors"
+                  >
+                    <span className="flex items-baseline gap-2 min-w-0">
+                      <span className="text-sm font-bold shrink-0">Semana {idx + 1}</span>
+                      <span className="text-xs text-gray-600 truncate">
+                        {monday.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0 text-xs whitespace-nowrap">
+                      <span title="Entrenos completados / planificados">✓ {completedCount}/{wk.items.length}</span>
+                      {totalKm > 0 && <span>{totalKm.toFixed(1)} km</span>}
+                      <span className="text-gray-600">{isExpanded ? '▾' : '▸'}</span>
+                    </span>
+                  </button>
+                  {/* Grid con tinte apagado para distinguirla de la semana en curso */}
+                  {isExpanded && <div className="px-4 pb-4 opacity-75">{dayGrid}</div>}
+                </div>
+              )
+            }
+
+            // Semana ACTUAL (borde de acento, siempre expandida) y FUTURAS (estilo normal)
             return (
-              <div key={wk.weekStart} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <div
+                key={wk.weekStart}
+                className={`bg-gray-900 border rounded-xl p-4 ${isCurrent ? 'border-red-700/60' : 'border-gray-800'}`}
+              >
                 <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
                   <h3 className="text-sm font-bold text-gray-300">
                     Semana {idx + 1}
                     <span className="text-gray-600 font-normal ml-2">
                       {monday.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
                     </span>
+                    {isCurrent && (
+                      <span className="ml-2 align-middle text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-500/15 text-red-300">
+                        Semana actual
+                      </span>
+                    )}
                   </h3>
                   <div className="flex items-center gap-2 text-xs">
                     {/* Desglose de km por disciplina */}
@@ -410,65 +536,7 @@ export default function Plan() {
                     })()}
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
-                  {DAY_NAMES.map((dn, i) => {
-                    const dayDate = new Date(monday)
-                    dayDate.setDate(dayDate.getDate() + i)
-                    const dayKey = formatDayKey(dayDate)
-                    const workoutsToday = wk.items.filter(w => w.date === dayKey)
-                    const isToday = formatDayKey(new Date()) === dayKey
-                    const isDragOver = dragOverKey === dayKey
-                    return (
-                      <div
-                        key={i}
-                        onDragOver={e => {
-                          if (draggingId != null) {
-                            e.preventDefault()
-                            if (dragOverKey !== dayKey) setDragOverKey(dayKey)
-                          }
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverKey === dayKey) setDragOverKey(null)
-                        }}
-                        onDrop={e => {
-                          e.preventDefault()
-                          handleDropOnDay(dayKey)
-                        }}
-                        className={`flex md:block gap-3 md:gap-0 rounded-lg p-2 min-h-[52px] md:min-h-[90px] transition-colors ${
-                          isDragOver
-                            ? 'border-2 border-red-400 bg-red-950/30'
-                            : isToday
-                              ? 'border-2 border-red-500/60 bg-gray-950'
-                              : 'bg-gray-950/60 border border-gray-800'
-                        }`}
-                      >
-                        <div className={`text-[10px] uppercase font-bold mb-0 md:mb-1 shrink-0 w-12 md:w-auto ${isToday ? 'text-red-400' : 'text-gray-500'}`}>
-                          {dn} {dayDate.getDate()}
-                        </div>
-                        <div className="flex-1 space-y-1">
-                          {workoutsToday.map(w => (
-                            <WorkoutCard
-                              key={w.id}
-                              workout={w}
-                              isDragging={draggingId === w.id}
-                              onClick={() => setSelectedWorkout(w)}
-                              onDragStart={e => {
-                                setDraggingId(w.id)
-                                e.dataTransfer.effectAllowed = 'move'
-                                // Algunos navegadores requieren setData para iniciar el drag
-                                try { e.dataTransfer.setData('text/plain', String(w.id)) } catch { /* noop */ }
-                              }}
-                              onDragEnd={() => {
-                                setDraggingId(null)
-                                setDragOverKey(null)
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+                {dayGrid}
               </div>
             )
           })}
