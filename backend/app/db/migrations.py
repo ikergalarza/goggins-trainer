@@ -20,6 +20,8 @@ COLUMNS_TO_ADD = [
     ("users", "experience_level", "VARCHAR"),
     ("users", "training_days_per_week", "INTEGER"),
     ("users", "vam_ms", "DOUBLE PRECISION"),
+    ("users", "vam_updated_at", "TIMESTAMPTZ"),
+    ("users", "adaptive_paces", "JSON"),
 
     # Goal — campos nuevos
     ("goals", "sport", "VARCHAR"),

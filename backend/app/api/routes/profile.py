@@ -56,6 +56,9 @@ def get_profile(user_id: int, current: User = Depends(get_current_user), db: Ses
         "vam_ms": user.vam_ms,
         "hr_zones": hr_data,
         "target_paces": paces,
+        # Ritmos que se recalculan solos con marcas/actividades (VDOT). Null si
+        # aún no hay evidencia suficiente.
+        "adaptive_paces": user.adaptive_paces,
     }
 
 
@@ -64,12 +67,25 @@ def update_profile(user_id: int, body: ProfileIn, current: User = Depends(get_cu
     authorize_user(user_id, current)
     user = _user_or_create(db, user_id)
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    # Si la VAM cambia, la fechamos: los ritmos adaptativos solo la prefieren
+    # a las carreras reales si es reciente.
+    if "vam_ms" in data and data["vam_ms"] != user.vam_ms:
+        from datetime import datetime, timezone
+        user.vam_updated_at = datetime.now(timezone.utc) if data["vam_ms"] else None
+    for field, value in data.items():
         setattr(user, field, value)
 
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # Recalcular ritmos adaptativos (la VAM es una de sus fuentes).
+    try:
+        from app.services import adaptive_paces
+        adaptive_paces.refresh_for_user(user, db)
+    except Exception:
+        pass
 
     hr_data = compute_hr_zones(user.age, user.max_heart_rate, user.resting_heart_rate, user.sex)
     paces = compute_paces_from_vam(user.vam_ms) if user.vam_ms else None
@@ -77,4 +93,5 @@ def update_profile(user_id: int, body: ProfileIn, current: User = Depends(get_cu
         "message": "Perfil actualizado",
         "hr_zones": hr_data,
         "target_paces": paces,
+        "adaptive_paces": user.adaptive_paces,
     }

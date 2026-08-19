@@ -43,6 +43,7 @@ Reglas estrictas:
 - `day_of_week`: 0=lunes, 1=martes, ..., 6=domingo.
 - Cada workout DEBE tener instructions claras: estructura del entreno (calentamiento + bloque principal + vuelta a la calma) en 1-3 frases.
 - Usa la información de marcas, ritmos objetivo y volumen actual del atleta para calibrar distancias.
+- Si `profile.adaptive_paces` existe, esos son los ritmos REALES del atleta (VDOT calculado de sus marcas y carreras recientes): usa `paces_min_per_km.easy` para rodajes/Z2, `threshold` para tempo/umbral, `interval` para series y `repetition` para repeticiones cortas. Escribe esos ritmos en las instrucciones (p. ej. «6x800 m a 3:55/km»). No inventes otros.
 
 Formato JSON exacto:
 {
@@ -92,6 +93,7 @@ Reglas estrictas:
 - `day_of_week`: 0=lunes, 1=martes, ..., 6=domingo.
 - Cada workout DEBE tener instructions claras (calentamiento + bloque principal + vuelta a la calma) en 1-3 frases, con referencias a ritmo/potencia/zona cuando aplique.
 - En natación usa `distance_km` en km (p.ej. 1.5 = 1500 m) y duración en minutos.
+- Si `profile.adaptive_paces` existe, usa esos ritmos (VDOT real del atleta) para la CARRERA: `easy` rodajes, `threshold` tempo/umbral, `interval` series. Escríbelos en las instrucciones.
 
 Formato JSON exacto:
 {
@@ -333,6 +335,9 @@ def _build_context(user: User, goal: Goal, db: Session) -> dict[str, Any]:
             "max_hr": user.max_heart_rate,
             "resting_hr": user.resting_heart_rate,
             "vam_ms": user.vam_ms,
+            # Ritmos adaptativos (VDOT) calculados de marcas/actividades reales.
+            # Son la referencia de ritmos MÁS fiable: úsalos antes que la VAM.
+            "adaptive_paces": _adaptive_paces_ctx(user),
         },
         "goal": goal_ctx,
         "current_volume": current_volume,
@@ -662,3 +667,20 @@ def unlinked_activities(user: User, db: Session, since: date | None = None, limi
         .all()
     )
     return [a for a in rows if str(a.strava_id) not in used][:limit]
+
+def _adaptive_paces_ctx(user) -> dict | None:
+    """Resumen de los ritmos adaptativos para el prompt (o None si no hay)."""
+    ap = getattr(user, "adaptive_paces", None)
+    if not ap:
+        return None
+    src = ap.get("source") or {}
+    return {
+        "vdot": ap.get("vdot"),
+        "paces_min_per_km": ap.get("paces"),
+        "based_on": {
+            "kind": src.get("kind"),
+            "detail": src.get("category") or src.get("name") or ("VAM" if src.get("kind") == "vam" else None),
+            "date": src.get("date"),
+        },
+        "computed_at": ap.get("computed_at"),
+    }

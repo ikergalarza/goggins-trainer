@@ -209,6 +209,13 @@ def sync_strava(
     except Exception as e:
         logger.warning(f"[sync] match_strava_to_workouts falló: {e}")
 
+    # Ritmos adaptativos: con actividades nuevas puede cambiar la mejor evidencia.
+    try:
+        from app.services import adaptive_paces
+        adaptive_paces.refresh_for_user(user, db)
+    except Exception as e:
+        logger.warning(f"[sync] adaptive_paces falló: {e}")
+
     logger.info(f"[sync] Sync completada: {new_count} nuevas, {matched} workouts emparejados")
     return {"message": "Sincronización completada", "new_activities": new_count, "matched_workouts": matched}
 

@@ -56,6 +56,7 @@ def create_record(user_id: int, body: RecordIn, current: User = Depends(get_curr
     db.add(record)
     db.commit()
     db.refresh(record)
+    _refresh_paces(user_id, db)
     return {"id": record.id, "message": "Marca guardada"}
 
 
@@ -71,4 +72,16 @@ def delete_record(user_id: int, record_id: int, current: User = Depends(get_curr
         raise HTTPException(status_code=404, detail="Marca no encontrada")
     db.delete(record)
     db.commit()
+    _refresh_paces(user_id, db)
     return {"message": "Marca eliminada"}
+
+
+def _refresh_paces(user_id: int, db: Session) -> None:
+    """Una marca nueva/borrada puede cambiar la mejor evidencia de ritmos."""
+    try:
+        from app.services import adaptive_paces
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            adaptive_paces.refresh_for_user(user, db)
+    except Exception:
+        pass

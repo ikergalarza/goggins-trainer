@@ -115,6 +115,9 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         "max_hr": user.max_heart_rate,
         "resting_hr": user.resting_heart_rate,
         "vam_ms": user.vam_ms,
+        # Ritmos adaptativos (VDOT) calculados de marcas/actividades reales.
+        # Son la referencia de ritmos MÁS fiable: úsalos antes que la VAM.
+        "adaptive_paces": _adaptive_paces_ctx(user),
     }
 
     # Objetivos activos
@@ -400,3 +403,20 @@ def chat_stream(
     db.commit()
 
     yield {"phase": "done", "content": full_text, "mutations": mutations}
+
+def _adaptive_paces_ctx(user) -> dict | None:
+    """Resumen de los ritmos adaptativos para el prompt (o None si no hay)."""
+    ap = getattr(user, "adaptive_paces", None)
+    if not ap:
+        return None
+    src = ap.get("source") or {}
+    return {
+        "vdot": ap.get("vdot"),
+        "paces_min_per_km": ap.get("paces"),
+        "based_on": {
+            "kind": src.get("kind"),
+            "detail": src.get("category") or src.get("name") or ("VAM" if src.get("kind") == "vam" else None),
+            "date": src.get("date"),
+        },
+        "computed_at": ap.get("computed_at"),
+    }

@@ -29,6 +29,13 @@ class User(Base):
 
     # VAM test (velocidad aeróbica máxima en m/s) — opcional, para calcular ritmos/zonas
     vam_ms = Column(Float, nullable=True)
+    # Cuándo se actualizó la VAM por última vez: los ritmos adaptativos solo la
+    # prefieren a las carreras reales si es reciente.
+    vam_updated_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Ritmos adaptativos (VDOT + ritmos E/M/T/I/R + fuente), recalculados al
+    # sincronizar Strava y al guardar marcas/VAM. Ver services/adaptive_paces.
+    adaptive_paces = Column(JSON, nullable=True)
 
     # Zonas cardíacas (calculadas o manuales)
     heart_rate_zones = Column(JSON)  # {"z1": [0,120], "z2": [120,140], ...}

@@ -27,6 +27,40 @@ interface ProfileData {
   vam_ms: number | null
   hr_zones: any
   target_paces: any
+  adaptive_paces: AdaptivePaces | null
+}
+
+// Ritmos adaptativos (VDOT) que el backend recalcula solos con marcas y carreras.
+interface AdaptivePaces {
+  vdot: number
+  paces: Record<string, string>               // easy/marathon/threshold/interval/repetition -> "m:ss"
+  ranges: Record<string, { fast: string; slow: string }>
+  source: { kind: 'record' | 'activity' | 'vam'; category?: string; name?: string; date?: string | null; time_s?: number; distance_m?: number }
+  computed_at: string
+}
+
+const PACE_LABELS: { key: string; label: string; hint: string }[] = [
+  { key: 'easy', label: 'Rodaje', hint: 'Z2 · fácil' },
+  { key: 'marathon', label: 'Maratón', hint: 'Z3 · sostenido' },
+  { key: 'threshold', label: 'Umbral', hint: 'Z4 · tempo' },
+  { key: 'interval', label: 'Series', hint: 'Z5 · VO2máx' },
+  { key: 'repetition', label: 'Repeticiones', hint: 'cortas · velocidad' },
+]
+
+function describeSource(src: AdaptivePaces['source']): string {
+  const when = src.date ? new Date(src.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) : ''
+  if (src.kind === 'record') {
+    const cat = src.category || ''
+    const secs = src.time_s || 0
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), sec = secs % 60
+    const t = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`
+    return `tu marca de ${cat.replace('k', ' km')} (${t}${when ? `, ${when}` : ''})`
+  }
+  if (src.kind === 'activity') {
+    const km = src.distance_m ? (src.distance_m / 1000).toFixed(1) : ''
+    return `tu carrera «${src.name || 'sin nombre'}»${km ? ` de ${km} km` : ''}${when ? ` (${when})` : ''}`
+  }
+  return `tu test VAM${when ? ` (${when})` : ''}`
 }
 
 // VAM utilities — input en min/km (mm:ss), almacenado en m/s
@@ -122,8 +156,20 @@ export default function Profile() {
     setSaving(true)
     setMsg(null)
     try {
-      const { id, name, hr_zones, target_paces, ...rest } = profile
-      const payload = { ...rest, vam_ms: vamMs }
+      // Solo se envían los campos editables; hr_zones/target_paces/adaptive_paces
+      // los calcula el backend y son de solo lectura.
+      const payload = {
+        age: profile.age,
+        sex: profile.sex,
+        weight_kg: profile.weight_kg,
+        height_cm: profile.height_cm,
+        resting_heart_rate: profile.resting_heart_rate,
+        max_heart_rate: profile.max_heart_rate,
+        years_training: profile.years_training,
+        experience_level: profile.experience_level,
+        training_days_per_week: profile.training_days_per_week,
+        vam_ms: vamMs,
+      }
       await api.put(`/api/profile/${effectiveUserId}`, payload)
       const r = await api.get(`/api/profile/${effectiveUserId}`)
       setProfile(r.data)
@@ -264,6 +310,41 @@ export default function Profile() {
             <input type="text" value={vamPace} onChange={e => setVamPace(e.target.value)} className={input} placeholder="ej. 3:45" />
           </Field>
         </div>
+      </div>
+
+      {/* Ritmos adaptativos: salen solos de marcas y carreras; se actualizan al sincronizar */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <h2 className="font-semibold">⚡ Tus ritmos</h2>
+          {profile.adaptive_paces && (
+            <span className="text-xs font-black text-red-400">VDOT {profile.adaptive_paces.vdot}</span>
+          )}
+        </div>
+        {profile.adaptive_paces ? (
+          <>
+            <p className="text-xs text-gray-500">
+              Calculados de {describeSource(profile.adaptive_paces.source)}. Se recalculan solos cada vez que sincronizas o añades una marca, y Goggins los usa para el plan.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {PACE_LABELS.map(({ key, label, hint }) => {
+                const p = profile.adaptive_paces!.paces[key]
+                const r = profile.adaptive_paces!.ranges?.[key]
+                if (!p) return null
+                return (
+                  <div key={key} className="bg-gray-800/60 rounded-lg p-3 min-h-11">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-500">{label}</p>
+                    <p className="text-lg font-black text-red-400 leading-tight">{p} <span className="text-xs font-normal text-gray-500">/km</span></p>
+                    <p className="text-[10px] text-gray-600">{r ? `${r.fast}–${r.slow}` : hint}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-gray-500">
+            Aún no hay datos suficientes. Añade una marca de carrera reciente en Marcas, o sincroniza Strava con alguna carrera de 3 km o más, y aparecerán aquí.
+          </p>
+        )}
       </div>
 
       {/* Zonas calculadas */}
