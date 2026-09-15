@@ -140,3 +140,16 @@ def test_spec_exige_numero_de_series():
     # WOD quedaba ambiguo (¿cuántas series?).
     assert 'rounds` = nº de series' in wod_structure.PROMPT_SPEC
     assert "rounds 1 explícito" in wod_structure.PROMPT_SPEC
+
+
+def test_dobles_entrena_solo(db, user):
+    g = _hyrox_goal(db, user, "dobles")
+    block = hk.prompt_block(g, user)
+    # Reglas de carrera presentes (estrategia)...
+    assert "corren JUNTOS" in block
+    # ...pero el entrenamiento es en solitario: nada de relevos con compañero.
+    assert "ENTRENA SOLO" in block
+    assert "NUNCA prescribas relevos" in block
+    # En open/pro no hace falta el recordatorio extra.
+    g.hyrox_division = "pro"
+    assert "aunque compite en dobles" not in hk.prompt_block(g, user)

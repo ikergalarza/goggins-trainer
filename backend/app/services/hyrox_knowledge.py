@@ -83,7 +83,8 @@ FORMATO DE CARRERA (fijo, mundial): 8 rondas de [1 km de carrera + 1 estación],
 1 SkiErg 1000 m → 2 Sled Push 50 m → 3 Sled Pull 50 m → 4 Burpee Broad Jumps 80 m → 5 Remo 1000 m → 6 Farmers Carry 200 m → 7 Sandbag Lunges 100 m → 8 Wall Balls 100 reps.
 Total: 8 km corriendo + estaciones + Roxzone (la zona de transición entre carrera y estación: se RECORRE andando/trotando y puede comerse 4-8 min de carrera si no se entrena).
 
-DOBLES: los dos corren JUNTOS los 8 km completos. En cada estación solo UNO trabaja a la vez y el reparto es libre (relevos "tú vas / yo voy"); el que descansa permanece en la zona de la estación. El volumen total de estación es el MISMO que en individual, así que en dobles se corre igual que en singles pero se trabaja ~la mitad de estación con más frescura: el running pesa MÁS en el resultado, y los relevos (cambios rápidos, sin dudar) se entrenan.
+DOBLES (reglas de CARRERA, para estrategia): los dos corren JUNTOS los 8 km completos. En cada estación solo UNO trabaja a la vez y el reparto es libre; el que descansa permanece en la zona. El volumen total de estación es el mismo que en individual → en dobles se corre TODO pero se trabaja ~la mitad de estación con más frescura: el running pesa MÁS en el resultado.
+DOBLES en el ENTRENAMIENTO: el atleta ENTRENA SOLO. NUNCA prescribas relevos, cambios de pareja, "tú vas / yo voy" ni nada que requiera un compañero presente. Las simulaciones se hacen en solitario con el volumen COMPLETO de estación (entrenar el total en solitario deja el día de carrera, con media estación, mucho más asequible). La estrategia de reparto con el compañero es tema de CHARLA (chat), no de sesiones.
 
 PRINCIPIOS DE ENTRENAMIENTO:
 1. RUNNING COMPROMETIDO (compromised running): correr con fatiga de estación es LA habilidad diferencial. Se entrena alternando estación→carrera sin descanso (p. ej. 4×[500-1000 m + estación]). El error clásico es entrenar carrera y fuerza por separado y descubrir en carrera que las piernas no responden tras el sled.
@@ -103,6 +104,11 @@ def prompt_block(goal: Goal, user: User) -> str:
         "\nUSA SIEMPRE estos pesos y volúmenes de SU división al prescribir estaciones "
         "(en entrenamiento puede trabajarse al 70-110% del peso de competición, dilo explícitamente). "
         "NUNCA prescribas una estación sin peso/volumen concreto."
+        + (
+            "\nRECUERDA: aunque compite en dobles, ENTRENA SOLO — cero sesiones de relevos "
+            "o con compañero; simulaciones en solitario a volumen completo."
+            if key.startswith("doubles_") else ""
+        )
     )
 
 
