@@ -133,3 +133,10 @@ def test_set_training_feedback(db, user):
     # rating inválido no rompe ni guarda
     bad = agent_tools.execute_tool("set_training_feedback", {"area": "remo", "rating": "regulinchi"}, user, db)
     assert not bad["ok"]
+
+
+def test_spec_exige_numero_de_series():
+    # Guardia del prompt: sin esto la IA emitía bloques "sets" sin rounds y el
+    # WOD quedaba ambiguo (¿cuántas series?).
+    assert 'rounds` = nº de series' in wod_structure.PROMPT_SPEC
+    assert "rounds 1 explícito" in wod_structure.PROMPT_SPEC

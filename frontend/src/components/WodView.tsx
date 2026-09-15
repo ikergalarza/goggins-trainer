@@ -47,12 +47,13 @@ function fmtDist(m: number): string {
 
 function blockBadge(b: WodBlock): string {
   const f = b.format || 'rounds'
-  if (f === 'rounds') return b.rounds ? `${b.rounds} RONDAS` : 'RONDAS'
+  const n = b.rounds
+  if (f === 'rounds') return n ? `${n} RONDA${n === 1 ? '' : 'S'}` : 'RONDAS'
   if (f === 'amrap') return `AMRAP ${b.duration_min ? `${b.duration_min}'` : ''}`.trim()
   if (f === 'emom') return `EMOM${b.interval_s ? ` ${fmtSecs(b.interval_s)}` : ''}${b.duration_min ? ` × ${b.duration_min}'` : ''}`
-  if (f === 'fortime') return 'FOR TIME'
-  if (f === 'sets') return 'SERIES'
-  return 'CIRCUITO'
+  if (f === 'fortime') return n ? `${n} RONDAS FOR TIME` : 'FOR TIME'
+  if (f === 'sets') return n ? `${n} SERIE${n === 1 ? '' : 'S'}` : 'SERIES'
+  return n ? `${n} VUELTA${n === 1 ? '' : 'S'}` : 'CIRCUITO'
 }
 
 function doseChips(it: WodItem): string[] {
@@ -103,6 +104,14 @@ export default function WodView({ structure }: { structure: WodStructure }) {
               {b.rest_s != null && b.rest_s > 0 && (
                 <span className="text-[10px] font-bold text-gray-400 bg-gray-700/70 px-2 py-0.5 rounded">
                   rec {fmtSecs(b.rest_s)}
+                </span>
+              )}
+              {(b.format === 'sets' || b.format === 'circuit') && !b.rounds && (
+                <span
+                  className="text-[10px] font-bold text-yellow-500/90 bg-yellow-500/10 px-2 py-0.5 rounded"
+                  title="Este WOD se generó sin nº de series; pídele a Goggins que lo concrete o regenera el plan"
+                >
+                  series sin nº
                 </span>
               )}
             </div>

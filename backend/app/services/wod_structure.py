@@ -39,7 +39,8 @@ Los workouts de tipo hyrox_sim, hyrox_stations, strength_upper, strength_lower y
 REGLAS del structure:
 - `exercise` SOLO de: run, ski_erg, sled_push, sled_pull, burpee_broad_jump, row, farmers_carry, sandbag_lunges, wall_balls, burpee, squat, front_squat, thruster, deadlift, kb_swing, box_jump, press, pull_up, plank, carry, bike_erg, mobility, other. Con "other" añade "name".
 - CADA item lleva su dosis: `reps` o `distance_m` o `duration_s`; y `weight_kg` SIEMPRE que el ejercicio sea con carga (usa los pesos de la división del atleta; si entrenas por encima o debajo del peso de competición, dilo en notes).
-- `format`: "rounds" (con `rounds`), "amrap" (con `duration_min`), "emom" (con `interval_s` y `duration_min`), "fortime", "sets", "circuit". `rest_s` = descanso entre rondas/series.
+- `format`: "rounds" (con `rounds`), "amrap" (con `duration_min`), "emom" (con `interval_s` y `duration_min`), "fortime", "sets" (con `rounds` = nº de series), "circuit" (con `rounds` = nº de vueltas). `rest_s` = descanso entre rondas/series.
+- OBLIGATORIO: todo bloque "rounds", "sets" o "circuit" lleva `rounds`. Un bloque de fuerza de 4 series de 6 peso muerto se escribe: format "sets", rounds 4, item {"exercise": "deadlift", "reps": 6, "weight_kg": ...}. NUNCA un bloque de fuerza con una sola pasada implícita: si de verdad es 1 serie, pon rounds 1 explícito.
 - El calentamiento es ESPECÍFICO del trabajo del día (movilidad de lo que se usa + activación + aproximación progresiva), nunca "10 min genérico".
 - `objective` NUNCA vacío."""
 
