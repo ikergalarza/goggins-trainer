@@ -22,6 +22,7 @@ COLUMNS_TO_ADD = [
     ("users", "vam_ms", "DOUBLE PRECISION"),
     ("users", "vam_updated_at", "TIMESTAMPTZ"),
     ("users", "adaptive_paces", "JSON"),
+    ("users", "station_feedback", "JSON"),
 
     # Goal — campos nuevos
     ("goals", "sport", "VARCHAR"),
@@ -41,6 +42,7 @@ COLUMNS_TO_ADD = [
     ("workouts", "day_of_week", "INTEGER"),
 
     # Workout — tracking de ediciones (Goggins respeta cambios manuales)
+    ("workouts", "structure", "JSON"),
     ("workouts", "modified_by", "VARCHAR"),         # 'ai' | 'user' | null
     ("workouts", "updated_at", "TIMESTAMPTZ DEFAULT now()"),
 ]

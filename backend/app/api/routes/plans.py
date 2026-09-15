@@ -33,6 +33,7 @@ def _serialize_workout(w: Workout) -> dict:
         "planned_duration_min": w.planned_duration_min,
         "planned_heart_rate_zone": w.planned_heart_rate_zone,
         "instructions": w.instructions,
+        "structure": w.structure,
         "actual_distance_km": w.actual_distance_km,
         "actual_duration_min": w.actual_duration_min,
         "actual_avg_heart_rate": w.actual_avg_heart_rate,
@@ -124,6 +125,7 @@ class WorkoutUpdate(BaseModel):
     planned_duration_min: Optional[int] = None
     planned_heart_rate_zone: Optional[str] = None
     instructions: Optional[str] = None
+    structure: Optional[dict] = None
     # OJO: el campo se llama 'date' igual que el tipo datetime.date. Si se anota
     # como Optional[date], Pydantic resuelve el nombre al propio campo (None) y
     # rechaza cualquier fecha ("Input should be None") -> el PATCH de mover
@@ -150,6 +152,9 @@ def update_workout(workout_id: int, body: WorkoutUpdate, current: User = Depends
             workout.type = WorkoutType(data.pop("type"))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Tipo inválido: {e}")
+    if "structure" in data:
+        from app.services import wod_structure
+        workout.structure = wod_structure.sanitize(data.pop("structure"))
     if "date" in data:
         new_date = data.pop("date")
         workout.date = new_date

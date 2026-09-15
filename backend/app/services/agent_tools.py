@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.user import User
+from app.services import wod_structure
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.strava_activity import StravaActivity
 from app.models.goal import Goal
@@ -105,6 +106,10 @@ TOOLS: list[dict[str, Any]] = [
                 "duration_min": {"type": "integer"},
                 "hr_zone": {"type": "string", "description": "Z1..Z5 o rango como Z3-Z4"},
                 "instructions": {"type": "string"},
+                "structure": {
+                    "type": "object",
+                    "description": "WOD estructurado (objetivo, warmup{duration_min,steps}, blocks[{title,format,rounds,rest_s,items[{exercise,reps,distance_m,duration_s,weight_kg,pace}]}], cooldown, notes). OBLIGATORIO en workouts Hyrox/fuerza: pesos y dosis concretos en cada item.",
+                },
             },
             "required": ["workout_id"],
         },
@@ -138,6 +143,10 @@ TOOLS: list[dict[str, Any]] = [
                 "duration_min": {"type": "integer"},
                 "hr_zone": {"type": "string"},
                 "instructions": {"type": "string"},
+                "structure": {
+                    "type": "object",
+                    "description": "WOD estructurado (objetivo, warmup{duration_min,steps}, blocks[{title,format,rounds,rest_s,items[{exercise,reps,distance_m,duration_s,weight_kg,pace}]}], cooldown, notes). OBLIGATORIO en workouts Hyrox/fuerza: pesos y dosis concretos en cada item.",
+                },
                 "goal_id": {
                     "type": "integer",
                     "description": "ID del objetivo al que asociar el workout (opcional)",
@@ -289,8 +298,26 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["start_date", "end_date"],
         },
     },
+    {
+        "name": "set_training_feedback",
+        "description": (
+            "Guarda dónde va FUERTE o FLOJO el atleta en un área o estación "
+            "(p. ej. sled_push, wall_balls, running, remo, agarre). Úsala SIEMPRE "
+            "que el atleta te cuente sensaciones estables ('voy fatal en sled push', "
+            "'el remo lo llevo sobrado') para que los próximos WODs lo tengan en cuenta. "
+            "rating: 'fuerte' | 'normal' | 'flojo'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area": {"type": "string", "description": "Estación o área (slug corto: sled_push, wall_balls, running, ski_erg, row, farmers_carry, sandbag_lunges, burpee_broad_jump, fuerza, agarre...)"},
+                "rating": {"type": "string", "enum": ["fuerte", "normal", "flojo"]},
+                "note": {"type": "string", "description": "Detalle opcional en palabras del atleta"},
+            },
+            "required": ["area", "rating"],
+        },
+    },
 ]
-
 
 # ────────────────────────────────────────────────────────────────────
 # Helpers
@@ -314,6 +341,7 @@ def _serialize_workout(w: Workout) -> dict[str, Any]:
         "duration_min": w.planned_duration_min,
         "hr_zone": w.planned_heart_rate_zone,
         "instructions": w.instructions,
+        "structure": w.structure,
     }
 
 
@@ -392,6 +420,9 @@ def _tool_update_workout(input: dict, user: User, db: Session) -> dict:
     if "instructions" in input and input["instructions"]:
         w.instructions = input["instructions"]
         changes["instructions"] = w.instructions
+    if "structure" in input and input["structure"] is not None:
+        w.structure = wod_structure.sanitize(input["structure"])
+        changes["structure"] = "actualizado" if w.structure else "vacío/inválido"
 
     w.modified_by = "user"
     db.add(w)
@@ -442,6 +473,7 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         planned_duration_min=input.get("duration_min"),
         planned_heart_rate_zone=input.get("hr_zone"),
         instructions=input.get("instructions"),
+        structure=wod_structure.sanitize(input.get("structure")),
         modified_by="user",
     )
     db.add(w)
@@ -792,6 +824,33 @@ def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
     }
 
 
+def _tool_set_training_feedback(input: dict, user: User, db: Session) -> dict:
+    from datetime import datetime, timezone
+    area = (input.get("area") or "").strip().lower().replace(" ", "_")[:40]
+    rating = input.get("rating")
+    if not area or rating not in ("fuerte", "normal", "flojo"):
+        return {"ok": False, "error": "area y rating ('fuerte'|'normal'|'flojo') son obligatorios"}
+    fb = dict(user.station_feedback or {})
+    entry = {"rating": rating, "updated": datetime.now(timezone.utc).date().isoformat()}
+    note = (input.get("note") or "").strip()[:200]
+    if note:
+        entry["note"] = note
+    fb[area] = entry
+    # Máximo 30 áreas: si el modelo se inventa slugs sin parar, no crecemos sin límite.
+    if len(fb) > 30:
+        fb = dict(sorted(fb.items(), key=lambda kv: kv[1].get("updated", ""))[-30:])
+    user.station_feedback = fb
+    db.add(user)
+    db.commit()
+    return {
+        "ok": True,
+        "mutation": "set_training_feedback",
+        "summary": f"Anotado: {area} = {rating}",
+        "feedback": fb,
+    }
+
+
+
 _DISPATCH = {
     "list_workouts": _tool_list_workouts,
     "move_workout": _tool_move_workout,
@@ -804,7 +863,9 @@ _DISPATCH = {
     "adjust_week_load": _tool_adjust_week_load,
     "get_strava_summary": _tool_get_strava_summary,
     "compare_planned_vs_actual": _tool_compare_planned_vs_actual,
+    "set_training_feedback": _tool_set_training_feedback,
 }
+
 
 
 def execute_tool(name: str, input: dict, user: User, db: Session) -> dict:

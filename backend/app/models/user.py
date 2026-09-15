@@ -37,6 +37,11 @@ class User(Base):
     # sincronizar Strava y al guardar marcas/VAM. Ver services/adaptive_paces.
     adaptive_paces = Column(JSON, nullable=True)
 
+    # Feedback del atleta sobre sus puntos fuertes/débiles por estación o área
+    # ({"sled_push": {"rating": "mal", "note": "...", "updated": "..."}}). Lo
+    # escribe Goggins vía tool cuando el atleta se lo cuenta, y sesga los WODs.
+    station_feedback = Column(JSON, nullable=True)
+
     # Zonas cardíacas (calculadas o manuales)
     heart_rate_zones = Column(JSON)  # {"z1": [0,120], "z2": [120,140], ...}
 

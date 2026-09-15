@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+/* Pictogramas de ejercicio animados (2 fotogramas). Ver components/exercises. */
+@keyframes wod-frame-a {
+  0%, 49.9% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@keyframes wod-frame-b {
+  0%, 49.9% { opacity: 0; }
+  50%, 100% { opacity: 1; }
+}
+.wod-frame-a { animation: wod-frame-a 1.1s steps(1) infinite; }
+.wod-frame-b { animation: wod-frame-b 1.1s steps(1) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .wod-frame-a { animation: none; opacity: 1; }
+  .wod-frame-b { animation: none; opacity: 0; }
+}

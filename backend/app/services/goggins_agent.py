@@ -21,7 +21,7 @@ from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
-from app.services import ai_client, agent_tools, record_labels
+from app.services import ai_client, agent_tools, hyrox_knowledge, record_labels, wod_structure
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,8 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         # Ritmos adaptativos (VDOT) calculados de marcas/actividades reales.
         # Son la referencia de ritmos MÁS fiable: úsalos antes que la VAM.
         "adaptive_paces": _adaptive_paces_ctx(user),
+        # Dónde dice el atleta que va fuerte/flojo (escrito vía set_training_feedback).
+        "training_feedback": user.station_feedback or None,
     }
 
     # Objetivos activos
@@ -301,8 +303,22 @@ def chat_stream(
     yield {"phase": "context", "message": "Cargando tu estado actual"}
     context = _build_athlete_context(user, db)
 
+    # Conocimiento Hyrox solo si el atleta prepara un Hyrox: engordar el prompt
+    # del resto de deportes no aporta y cuesta tokens.
+    hyrox_block = hyrox_knowledge.prompt_block_for_user(user, db)
+    if hyrox_block:
+        hyrox_block = (
+            "\n\n" + hyrox_block
+            + "\n\n" + wod_structure.PROMPT_SPEC
+            + "\nCuando crees o edites WODs de Hyrox/fuerza con add_workout/update_workout, "
+            "pasa SIEMPRE el campo `structure` con ese formato (objetivo, calentamiento "
+            "específico paso a paso, bloques con pesos de su división, enfriamiento), "
+            "además de unas instructions de 1-2 frases."
+        )
+
     full_system = (
         SYSTEM_PROMPT
+        + hyrox_block
         + "\n\n=== CONTEXTO ACTUAL DEL ATLETA ===\n"
         + json.dumps(context, ensure_ascii=False, indent=2, default=str)
         + "\n=== FIN CONTEXTO ===\n"

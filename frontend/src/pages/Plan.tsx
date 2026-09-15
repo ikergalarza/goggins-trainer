@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import api, { API_BASE, authHeaders } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import WorkoutCard from '../components/WorkoutCard'
+import WodView, { type WodStructure } from '../components/WodView'
 import {
   TYPE_LABELS,
   STATUS_LABELS,
@@ -46,6 +47,7 @@ interface Workout {
   perceived_effort: number | null
   notes: string | null
   strava_activity_id: string | null
+  structure: WodStructure | null
 }
 
 // Actividad de Strava sin workout (lo hecho fuera del plan) — /api/plans/unlinked
@@ -723,7 +725,9 @@ export default function Plan() {
               })()}
             </div>
 
-            {selectedWorkout.instructions && (() => {
+            {selectedWorkout.structure && <WodView structure={selectedWorkout.structure} />}
+
+            {!selectedWorkout.structure && selectedWorkout.instructions && (() => {
               const sets = parseIntervals(selectedWorkout.instructions)
               return (
                 <div className="space-y-2">

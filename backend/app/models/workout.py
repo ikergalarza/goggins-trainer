@@ -57,6 +57,9 @@ class Workout(Base):
     planned_duration_min = Column(Integer, nullable=True)
     planned_heart_rate_zone = Column(String, nullable=True)
     instructions = Column(Text, nullable=True)  # descripción generada por Claude
+    # WOD estructurado (objetivo, calentamiento, bloques con pesos, enfriamiento).
+    # Lo emite la IA según wod_structure.PROMPT_SPEC; la UI lo pinta visual.
+    structure = Column(JSON, nullable=True)
 
     # Real (de Strava o feedback manual)
     actual_distance_km = Column(Float, nullable=True)

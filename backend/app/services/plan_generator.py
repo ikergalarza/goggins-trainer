@@ -17,7 +17,7 @@ from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
-from app.services import ai_client, record_labels
+from app.services import ai_client, hyrox_knowledge, record_labels, wod_structure
 from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
 
@@ -338,6 +338,9 @@ def _build_context(user: User, goal: Goal, db: Session) -> dict[str, Any]:
             # Ritmos adaptativos (VDOT) calculados de marcas/actividades reales.
             # Son la referencia de ritmos MÁS fiable: úsalos antes que la VAM.
             "adaptive_paces": _adaptive_paces_ctx(user),
+            # Autoevaluación del atleta por estación/área: sesga el plan hacia
+            # sus puntos flojos sin abandonar los fuertes.
+            "training_feedback": user.station_feedback or None,
         },
         "goal": goal_ctx,
         "current_volume": current_volume,
@@ -405,6 +408,24 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
             "el formato especificado.\n\n"
             f"```json\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}\n```"
         )
+    elif hyrox_knowledge.is_hyrox_goal(goal):
+        # Hyrox: el prompt base + el conocimiento específico (formato de carrera,
+        # pesos de SU división, metodología) + el formato estructurado de WOD.
+        system_prompt = (
+            SYSTEM_PROMPT
+            + "\n\n" + wod_structure.PROMPT_SPEC
+            + "\n\n" + hyrox_knowledge.prompt_block(goal, user)
+        )
+        user_message = (
+            f"Genera un plan HYROX de {weeks} semanas para este atleta. "
+            "Periodízalo (base→build→peak→taper), incluye running comprometido cada semana, "
+            "trabajo de estaciones con los pesos de su división, y una simulación parcial o "
+            "completa cada 1-2 semanas. CADA workout de estaciones/fuerza/simulación lleva su "
+            "`structure` completo (objetivo, calentamiento específico, bloques con pesos, "
+            "enfriamiento). Si `profile.training_feedback` existe, dedica MÁS volumen a las "
+            "áreas 'flojo' (sin abandonar las fuertes) y dilo en el objective del WOD.\n\n"
+            f"```json\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}\n```"
+        )
     else:
         system_prompt = SYSTEM_PROMPT
         user_message = (
@@ -419,7 +440,7 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
     # Escala max_tokens al tamaño del plan: un plan multideporte de N semanas
     # con varias sesiones/día y sus instrucciones es mucho más largo que uno de
     # solo carrera, y a 6000 tokens el JSON se truncaba (fallo "sin weekly_plan").
-    per_week = 1200 if is_tri else 650
+    per_week = 1200 if (is_tri or hyrox_knowledge.is_hyrox_goal(goal)) else 650
     max_tokens = min(16000, 6000 + weeks * per_week)
 
     client = ai_client.get_client()
@@ -503,6 +524,7 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
                 planned_duration_min=w.get("duration_min"),
                 planned_heart_rate_zone=w.get("hr_zone"),
                 instructions=w.get("instructions"),
+                structure=wod_structure.sanitize(w.get("structure")),
                 modified_by="ai",
             )
             db.add(wk)
