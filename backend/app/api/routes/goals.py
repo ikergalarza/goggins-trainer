@@ -133,6 +133,14 @@ def delete_goal(user_id: int, goal_id: int, current: User = Depends(get_current_
     goal = db.query(Goal).filter(Goal.id == goal_id, Goal.user_id == user_id).first()
     if not goal:
         raise HTTPException(status_code=404, detail="Objetivo no encontrado")
+    # Sus workouts se van con él: dejarlos huérfanos era lo que hacía que las
+    # semanas de un plan viejo reaparecieran bajo el objetivo siguiente.
+    from app.models.workout import Workout
+    deleted = (
+        db.query(Workout)
+        .filter(Workout.user_id == user_id, Workout.goal_id == goal_id)
+        .delete(synchronize_session=False)
+    )
     db.delete(goal)
     db.commit()
-    return {"message": "Objetivo eliminado"}
+    return {"message": "Objetivo eliminado", "workouts_deleted": int(deleted)}

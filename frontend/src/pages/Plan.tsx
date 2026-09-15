@@ -18,7 +18,7 @@ import {
 import { parseLocalDate, formatDayKey, startOfWeek } from '../lib/date'
 
 // Disciplinas mostradas en la leyenda (orden lógico de un triatlón + fuerza/descanso).
-const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'strength', 'mobility', 'rest']
+const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'hyrox', 'strength', 'mobility', 'rest']
 
 interface Goal {
   id: number
@@ -640,11 +640,13 @@ export default function Plan() {
 
       {selectedWorkout && (
         <div
-          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/70 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
           onClick={() => setSelectedWorkout(null)}
         >
+          {/* En móvil: hoja a pantalla casi completa con scroll interno (el WOD
+              estructurado es largo); en escritorio, modal centrado clásico. */}
           <div
-            className="bg-gray-900 border border-gray-800 rounded-xl p-6 max-w-md w-full space-y-4"
+            className="bg-gray-900 border border-gray-800 rounded-t-2xl sm:rounded-xl p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] max-w-md w-full space-y-4 max-h-[92dvh] sm:max-h-[88vh] overflow-y-auto overscroll-contain"
             onClick={e => e.stopPropagation()}
           >
             {(() => {
@@ -683,7 +685,8 @@ export default function Plan() {
                   </div>
                   <button
                     onClick={() => setSelectedWorkout(null)}
-                    className="text-gray-500 hover:text-white text-xl leading-none"
+                    aria-label="Cerrar"
+                    className="shrink-0 -mt-2 -mr-2 min-h-11 min-w-11 flex items-center justify-center rounded-lg text-gray-500 hover:text-white active:text-white active:bg-gray-800 text-2xl leading-none transition-colors"
                   >
                     ×
                   </button>
@@ -849,7 +852,7 @@ export default function Plan() {
               <select
                 value={selectedWorkout.status}
                 onChange={e => updateWorkout(selectedWorkout.id, { status: e.target.value })}
-                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+                className="flex-1 min-h-11 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-base sm:text-sm"
               >
                 <option value="planned">{STATUS_LABELS.planned}</option>
                 <option value="completed">{STATUS_LABELS.completed}</option>
@@ -866,7 +869,7 @@ export default function Plan() {
                     console.error(e)
                   }
                 }}
-                className="bg-red-900/50 hover:bg-red-900 text-red-300 px-3 py-2 rounded-lg text-sm"
+                className="min-h-11 min-w-11 flex items-center justify-center bg-red-900/50 hover:bg-red-900 active:bg-red-800 text-red-300 px-3 rounded-lg text-sm transition-colors"
               >
                 🗑
               </button>

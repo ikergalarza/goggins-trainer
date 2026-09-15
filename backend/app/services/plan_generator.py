@@ -380,6 +380,27 @@ def _compute_weeks(goal: Goal) -> int:
     return max(1, min(30, weeks_to_race))
 
 
+def _purge_planned_before_generate(user: User, goal: Goal, db: Session) -> int:
+    """Limpia la pizarra antes de escribir un plan nuevo.
+
+    Borra los PLANIFICADOS del mismo objetivo y los planificados huérfanos
+    (goal_id NULL: restos de planes previos a la columna o de objetivos
+    borrados) — eran los que hacían reaparecer "semanas viejas" bajo un
+    objetivo nuevo. Lo completado/saltado se conserva: es historia.
+    """
+    n = (
+        db.query(Workout)
+        .filter(
+            Workout.user_id == user.id,
+            (Workout.goal_id == goal.id) | (Workout.goal_id.is_(None)),
+            Workout.status == WorkoutStatus.planned,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return n
+
+
 def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[str, Any]]:
     """Versión streaming: yields events de progreso (phase, message, chunk, done...).
 
@@ -423,7 +444,10 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
             "completa cada 1-2 semanas. CADA workout de estaciones/fuerza/simulación lleva su "
             "`structure` completo (objetivo, calentamiento específico, bloques con pesos, "
             "enfriamiento). Si `profile.training_feedback` existe, dedica MÁS volumen a las "
-            "áreas 'flojo' (sin abandonar las fuertes) y dilo en el objective del WOD.\n\n"
+            "áreas 'flojo' (sin abandonar las fuertes) y dilo en el objective del WOD. "
+            "PROHIBIDO usar `cross_training` o sesiones genéricas de relleno: cada sesión es "
+            "específica (carrera de calidad, hyrox_stations, hyrox_sim, strength_* con "
+            "transferencia a las estaciones, o recovery/mobility con contenido concreto).\n\n"
             f"```json\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}\n```"
         )
     else:
@@ -487,12 +511,8 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
 
     yield {"phase": "saving", "message": "Guardando entrenos en la base de datos"}
 
-    # Borrar workouts planificados anteriores del mismo objetivo
     try:
-        db.query(Workout).filter(
-            Workout.goal_id == goal.id,
-            Workout.status == WorkoutStatus.planned,
-        ).delete(synchronize_session=False)
+        _purge_planned_before_generate(user, goal, db)
     except Exception as e:
         logger.warning(f"[plan_generator] no se pudo borrar workouts previos: {e}")
         db.rollback()

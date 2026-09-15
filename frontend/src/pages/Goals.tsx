@@ -70,6 +70,8 @@ export default function Goals() {
   const [weeklyKm, setWeeklyKm] = useState('')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  // null = creando; un id = editando ese objetivo (mismo formulario, PUT).
+  const [editingId, setEditingId] = useState<number | null>(null)
 
   const load = () => {
     if (effectiveUserId == null) return
@@ -89,6 +91,25 @@ export default function Goals() {
     setTimeStr('')
     setWeeklyKm('')
     setNotes('')
+  }
+
+  const startEdit = (g: Goal) => {
+    setEditingId(g.id)
+    setType(g.type)
+    setDescription(g.description || '')
+    setDistance(g.target_race_distance_km != null ? String(g.target_race_distance_km) : '')
+    setRaceDate(g.target_race_date ? g.target_race_date.slice(0, 10) : '')
+    setTimeStr(g.target_time_seconds ? formatSeconds(g.target_time_seconds) : '')
+    // Normaliza valores guardados en español/inglés a las opciones del select.
+    const rawDiv = (g.hyrox_division || 'open').toLowerCase()
+    setHyroxDivision(rawDiv.includes('mixt') || rawDiv.includes('mixed') ? 'mixed'
+      : rawDiv.includes('doble') || rawDiv.includes('double') ? 'doubles'
+      : rawDiv.includes('pro') ? 'pro' : 'open')
+    setTriathlonDistance(g.triathlon_distance || 'olympic')
+    setWeeklyKm(g.target_weekly_km != null ? String(g.target_weekly_km) : '')
+    setNotes(g.notes || '')
+    setShowForm(true)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const handleSave = async () => {
@@ -119,8 +140,13 @@ export default function Goals() {
       } else if (type === 'weekly_km') {
         payload.target_weekly_km = weeklyKm ? parseFloat(weeklyKm) : null
       }
-      await api.post(`/api/goals/${effectiveUserId}`, payload)
+      if (editingId != null) {
+        await api.put(`/api/goals/${effectiveUserId}/${editingId}`, payload)
+      } else {
+        await api.post(`/api/goals/${effectiveUserId}`, payload)
+      }
       resetForm()
+      setEditingId(null)
       setShowForm(false)
       load()
     } catch (err: any) {
@@ -170,15 +196,21 @@ export default function Goals() {
           <p className="text-gray-500 text-sm mt-1">{goals.length} objetivos</p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
-          className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-bold"
+          onClick={() => {
+            if (showForm) { setEditingId(null); resetForm() }
+            setShowForm(!showForm)
+          }}
+          className="shrink-0 min-h-11 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white px-4 rounded-lg text-sm font-bold transition-colors"
         >
-          {showForm ? 'Cancelar' : '+ Nuevo objetivo'}
+          {showForm ? 'Cancelar' : '+ Nuevo'}
         </button>
       </div>
 
       {showForm && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-6 space-y-4">
+          {editingId != null && (
+            <p className="text-xs font-bold text-yellow-500/90">✎ Editando objetivo — los cambios no regeneran el plan solos</p>
+          )}
           <div>
             <label className="block text-xs text-gray-400 mb-1">Tipo</label>
             <select value={type} onChange={e => setType(e.target.value)} className={input}>
@@ -239,7 +271,8 @@ export default function Goals() {
                   <select value={hyroxDivision} onChange={e => setHyroxDivision(e.target.value)} className={input}>
                     <option value="open">Open</option>
                     <option value="pro">Pro</option>
-                    <option value="doubles">Doubles</option>
+                    <option value="doubles">Dobles</option>
+                    <option value="mixed">Dobles mixto</option>
                     <option value="relay">Relay</option>
                   </select>
                 </div>
@@ -272,7 +305,7 @@ export default function Goals() {
             disabled={saving || !description}
             className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-bold"
           >
-            {saving ? 'Guardando...' : 'Guardar objetivo'}
+            {saving ? 'Guardando...' : editingId != null ? 'Guardar cambios' : 'Guardar objetivo'}
           </button>
         </div>
       )}
@@ -301,7 +334,17 @@ export default function Goals() {
                 <p className="text-sm text-red-400 font-bold mt-0.5">{renderGoal(g)}</p>
                 {g.notes && <p className="text-xs text-gray-500 mt-1">{g.notes}</p>}
               </div>
-              <DeleteButton onDelete={() => handleDelete(g.id)} label={`Eliminar objetivo: ${g.description}`} />
+              <div className="flex flex-col gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => startEdit(g)}
+                  aria-label={`Editar objetivo: ${g.description}`}
+                  className="min-h-11 min-w-11 flex items-center justify-center rounded-lg bg-gray-800/50 text-gray-500 hover:text-white hover:bg-gray-700 active:bg-gray-600 transition-colors"
+                >
+                  ✎
+                </button>
+                <DeleteButton onDelete={() => handleDelete(g.id)} label={`Eliminar objetivo: ${g.description}`} />
+              </div>
             </div>
           ))}
         </div>

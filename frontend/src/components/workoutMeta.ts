@@ -2,7 +2,7 @@
 // El backend NO almacena `discipline` (solo `type`), así que la derivamos aquí
 // a partir del `type` para colorear y agrupar de forma consistente.
 
-export type Discipline = 'swim' | 'bike' | 'run' | 'brick' | 'strength' | 'mobility' | 'rest'
+export type Discipline = 'swim' | 'bike' | 'run' | 'brick' | 'hyrox' | 'strength' | 'mobility' | 'rest'
 
 // Etiquetas legibles por tipo de entreno (es-ES).
 export const TYPE_LABELS: Record<string, string> = {
@@ -53,12 +53,13 @@ const TYPE_TO_DISCIPLINE: Record<string, Discipline> = {
   // Brick / transiciones (multidisciplina encadenada)
   brick: 'brick',
   transition: 'brick',
-  // Fuerza / Hyrox
+  // Hyrox (disciplina propia: un WOD no es "fuerza" a secas)
+  hyrox_sim: 'hyrox',
+  hyrox_stations: 'hyrox',
+  // Fuerza
   strength_upper: 'strength',
   strength_lower: 'strength',
   strength_full: 'strength',
-  hyrox_sim: 'strength',
-  hyrox_stations: 'strength',
   // Movilidad
   mobility: 'mobility',
   // Descanso
@@ -75,6 +76,7 @@ export const DISCIPLINE_ICONS: Record<Discipline, string> = {
   bike: '🚴',
   run: '🏃',
   brick: '🔁',
+  hyrox: '🔥',
   strength: '🏋️',
   mobility: '🧘',
   rest: '😴',
@@ -85,6 +87,7 @@ export const DISCIPLINE_LABELS: Record<Discipline, string> = {
   bike: 'Ciclismo',
   run: 'Carrera',
   brick: 'Brick',
+  hyrox: 'Hyrox',
   strength: 'Fuerza',
   mobility: 'Movilidad',
   rest: 'Descanso',
@@ -134,6 +137,13 @@ export const DISCIPLINE_THEME: Record<Discipline, DisciplineTheme> = {
     accentText: 'text-purple-400',
     dot: 'bg-purple-500',
     chipBg: 'bg-purple-500/15 text-purple-300',
+  },
+  hyrox: {
+    card: 'bg-amber-950/40 border-amber-800/50 text-amber-200',
+    accentBorder: 'border-l-amber-500',
+    accentText: 'text-amber-400',
+    dot: 'bg-amber-500',
+    chipBg: 'bg-amber-500/15 text-amber-300',
   },
   strength: {
     card: 'bg-gray-800/50 border-gray-600/50 text-gray-200',

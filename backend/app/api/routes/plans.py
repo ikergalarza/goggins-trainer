@@ -107,9 +107,11 @@ def list_plan_workouts(
     authorize_user(user_id, current)
     q = db.query(Workout).filter(Workout.user_id == user_id)
     if goal_id is not None:
-        # Incluye también los workouts sin objetivo asignado (p.ej. añadidos por
-        # Goggins sin goal_id), para que no queden "huérfanos" e invisibles.
-        q = q.filter((Workout.goal_id == goal_id) | (Workout.goal_id.is_(None)))
+        # Filtro ESTRICTO: los workouts sin objetivo son restos de planes/objetivos
+        # antiguos (o anteriores a la columna goal_id) y colarlos aquí hacía que
+        # las semanas de un plan borrado reaparecieran bajo cualquier objetivo
+        # nuevo. Los añadidos por Goggins llevan goal_id del objetivo activo.
+        q = q.filter(Workout.goal_id == goal_id)
     workouts = q.order_by(Workout.date.asc()).all()
     return [_serialize_workout(w) for w in workouts]
 
