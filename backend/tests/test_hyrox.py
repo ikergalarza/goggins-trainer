@@ -153,3 +153,34 @@ def test_dobles_entrena_solo(db, user):
     # En open/pro no hace falta el recordatorio extra.
     g.hyrox_division = "pro"
     assert "aunque compite en dobles" not in hk.prompt_block(g, user)
+
+
+def test_warmup_acepta_pasos_como_ejercicio_u_texto():
+    s = wod_structure.sanitize({
+        "warmup": {"duration_min": 10, "steps": [
+            {"exercise": "glute_bridge", "reps": 15, "notes": "2 series"},
+            "sube pulsaciones andando rápido",
+            {"exercise": "inventado_raro"},          # desconocido -> se conserva como other
+            {"exercise": "ninety_ninety", "duration_s": 120},
+        ]},
+        "blocks": [{"items": [{"exercise": "cat_camel", "reps": 10}]}],
+    })
+    steps = s["warmup"]["steps"]
+    assert steps[0] == {"exercise": "glute_bridge", "reps": 15, "notes": "2 series"}
+    assert steps[1] == "sube pulsaciones andando rápido"
+    assert steps[2] == {"exercise": "other", "name": "inventado_raro"}
+    assert steps[3] == {"exercise": "ninety_ninety", "duration_s": 120}
+    assert s["blocks"][0]["items"][0]["exercise"] == "cat_camel"
+
+
+def test_slugs_frontend_y_backend_coinciden():
+    """catalog.ts (frontend) y EXERCISES (backend) deben ser el mismo conjunto."""
+    import re
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[2] / "frontend/src/components/exercises/catalog.ts"
+    text = src.read_text(encoding="utf-8")
+    block = text.split("export const EXERCISES")[1].split("\n}\n")[0]
+    front = set(re.findall(r"^  ([a-z_0-9]+): \{ name:", block, re.MULTILINE))
+    back = set(wod_structure.EXERCISES)
+    assert front - back == set(), f"en frontend pero no en backend: {front - back}"
+    assert back - front == set(), f"en backend pero no en frontend: {back - front}"

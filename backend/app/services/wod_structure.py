@@ -16,15 +16,24 @@ EXERCISES = {
     "farmers_carry", "sandbag_lunges", "wall_balls", "burpee", "squat",
     "front_squat", "thruster", "deadlift", "kb_swing", "box_jump", "press",
     "pull_up", "plank", "carry", "bike_erg", "mobility", "other",
+    # Movilidad / calentamiento (cada uno con ficha y pictograma en la app)
+    "ninety_ninety", "cat_camel", "glute_bridge", "hip_flexor_stretch",
+    "thoracic_opener", "dead_bug", "bird_dog", "cossack_squat", "leg_swing",
+    "inchworm", "worlds_greatest", "ankle_rock", "lunge", "jumping_jack",
 }
 
 FORMATS = {"rounds", "amrap", "fortime", "emom", "sets", "circuit"}
 
 PROMPT_SPEC = """FORMATO ESTRUCTURADO DEL WOD (campo `structure` de cada workout):
-Los workouts de tipo hyrox_sim, hyrox_stations, strength_upper, strength_lower y strength_full DEBEN llevar, además de `instructions` (1-2 frases), un campo `structure`:
+Los workouts de tipo hyrox_sim, hyrox_stations, strength_upper, strength_lower, strength_full, mobility y recovery DEBEN llevar, además de `instructions` (1-2 frases), un campo `structure`:
 {
   "objective": "qué cualidad ataca hoy y por qué, en 1 frase (p. ej. 'Tolerancia a wall balls con pulso alto tras carrera')",
-  "warmup": {"duration_min": 10, "steps": ["500 m remo suave", "2×10 sentadillas con pausa 3s", "activación glúteo: 2×15 puentes", "aproximación: 2×12,5 m sled al 50%"]},
+  "warmup": {"duration_min": 10, "steps": [
+    {"exercise": "row", "distance_m": 500, "notes": "suave, progresivo"},
+    {"exercise": "squat", "reps": 10, "notes": "2 series, pausa 3s abajo"},
+    {"exercise": "glute_bridge", "reps": 15, "notes": "2 series"},
+    {"exercise": "sled_push", "distance_m": 12, "weight_kg": 76, "notes": "2 aproximaciones al 50%"}
+  ]},
   "blocks": [
     {"title": "Bloque principal", "format": "rounds", "rounds": 4, "rest_s": 120,
      "items": [
@@ -41,7 +50,8 @@ REGLAS del structure:
 - CADA item lleva su dosis: `reps` o `distance_m` o `duration_s`; y `weight_kg` SIEMPRE que el ejercicio sea con carga (usa los pesos de la división del atleta; si entrenas por encima o debajo del peso de competición, dilo en notes).
 - `format`: "rounds" (con `rounds`), "amrap" (con `duration_min`), "emom" (con `interval_s` y `duration_min`), "fortime", "sets" (con `rounds` = nº de series), "circuit" (con `rounds` = nº de vueltas). `rest_s` = descanso entre rondas/series.
 - OBLIGATORIO: todo bloque "rounds", "sets" o "circuit" lleva `rounds`. Un bloque de fuerza de 4 series de 6 peso muerto se escribe: format "sets", rounds 4, item {"exercise": "deadlift", "reps": 6, "weight_kg": ...}. NUNCA un bloque de fuerza con una sola pasada implícita: si de verdad es 1 serie, pon rounds 1 explícito.
-- El calentamiento es ESPECÍFICO del trabajo del día (movilidad de lo que se usa + activación + aproximación progresiva), nunca "10 min genérico".
+- El calentamiento es ESPECÍFICO del trabajo del día (movilidad de lo que se usa + activación + aproximación progresiva), nunca "10 min genérico". Cada paso del calentamiento (y de los bloques de movilidad) que sea un ejercicio identificable va como objeto {exercise, reps|duration_s|distance_m, notes} usando los slugs de la lista — la app muestra su ficha con dibujo y vídeo. Texto libre solo para indicaciones que no son un ejercicio ("sube pulsaciones andando rápido").
+- Slugs de movilidad disponibles: ninety_ninety (90-90 de cadera), cat_camel (gato-camello), glute_bridge (puente de glúteo), hip_flexor_stretch (flexor de cadera en zancada), thoracic_opener (apertura torácica), dead_bug (bicho muerto), bird_dog (perro-pájaro), cossack_squat (sentadilla cosaca), leg_swing (balanceo de pierna), inchworm (oruga), worlds_greatest (el mejor estiramiento del mundo), ankle_rock (movilidad de tobillo contra pared), lunge (zancada), jumping_jack.
 - `objective` NUNCA vacío."""
 
 _ITEM_KEYS = {"exercise", "name", "reps", "distance_m", "duration_s", "weight_kg", "pace", "target_m", "notes"}
@@ -106,7 +116,18 @@ def sanitize(raw: Any) -> Optional[dict[str, Any]]:
 
     wu = raw.get("warmup")
     if isinstance(wu, dict):
-        steps = [s for s in (_clean_str(x, 200) for x in (wu.get("steps") or [])[:20]) if s]
+        # Pasos: texto libre ("sube pulsaciones") o ejercicio identificable
+        # ({exercise, reps...}) — la UI muestra ficha y pictograma de estos.
+        steps: list[Any] = []
+        for x in (wu.get("steps") or [])[:20]:
+            if isinstance(x, dict):
+                item = _clean_item(x)
+                if item:
+                    steps.append(item)
+            else:
+                txt = _clean_str(x, 200)
+                if txt:
+                    steps.append(txt)
         clean_wu: dict[str, Any] = {}
         dur = _clean_num(wu.get("duration_min"))
         if dur:

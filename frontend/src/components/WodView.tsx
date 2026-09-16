@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { exerciseMeta } from './exercises/catalog'
 import { Pictogram } from './exercises/Pictogram'
+import ExerciseSheet from './exercises/ExerciseSheet'
 
 // Vista visual de un WOD estructurado (Workout.structure): objetivo,
 // calentamiento paso a paso, bloques con pictograma + dosis + pesos,
@@ -28,7 +30,7 @@ export interface WodBlock {
 }
 export interface WodStructure {
   objective?: string
-  warmup?: { duration_min?: number; steps?: string[] }
+  warmup?: { duration_min?: number; steps?: (string | WodItem)[] }
   blocks?: WodBlock[]
   cooldown?: string[]
   notes?: string
@@ -68,6 +70,8 @@ function doseChips(it: WodItem): string[] {
 
 export default function WodView({ structure }: { structure: WodStructure }) {
   const blocks = structure.blocks || []
+  // Ficha del ejercicio tocado (pictograma grande + cómo se hace + vídeo).
+  const [sheet, setSheet] = useState<{ slug: string; name?: string | null } | null>(null)
   return (
     <div className="space-y-4">
       {structure.objective && (
@@ -83,10 +87,26 @@ export default function WodView({ structure }: { structure: WodStructure }) {
             🔥 Calentamiento{structure.warmup.duration_min ? ` · ${structure.warmup.duration_min}'` : ''}
           </p>
           <ul className="space-y-1">
-            {(structure.warmup.steps || []).map((s, i) => (
-              <li key={i} className="text-sm text-gray-300 flex gap-2">
-                <span className="text-gray-600 shrink-0">{i + 1}.</span>
-                <span>{s}</span>
+            {(structure.warmup.steps || []).map((st, i) => (
+              <li key={i} className="text-sm text-gray-300 flex gap-2 items-start">
+                <span className="text-gray-600 shrink-0 pt-1.5">{i + 1}.</span>
+                {typeof st === 'string' ? (
+                  <span className="pt-1.5">{st}</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setSheet({ slug: st.exercise, name: st.name })}
+                    className="flex items-center gap-2 min-h-11 flex-1 min-w-0 text-left rounded-lg px-1.5 -ml-1.5 hover:bg-gray-800/60 active:bg-gray-800 transition-colors"
+                  >
+                    <span className="shrink-0 w-8 h-8 rounded-md bg-gray-900 border border-gray-800 text-yellow-500/90 p-0.5">
+                      <Pictogram slug={st.exercise} className="w-full h-full" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="font-medium text-gray-200">{exerciseMeta(st.exercise, st.name).label}</span>
+                      <span className="text-gray-500"> · {doseChips(st).join(' · ')}{st.notes ? ` · ${st.notes}` : ''}</span>
+                    </span>
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -129,10 +149,15 @@ export default function WodView({ structure }: { structure: WodStructure }) {
                     </div>
                   )}
                   <div className="flex items-center gap-3 py-1.5">
-                    <div className="shrink-0 w-11 h-11 rounded-lg bg-gray-900 border border-gray-800 text-red-400 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSheet({ slug: it.exercise, name: it.name })}
+                      aria-label={`Ver ficha de ${exerciseMeta(it.exercise, it.name).label}`}
+                      className="shrink-0 w-11 h-11 rounded-lg bg-gray-900 border border-gray-800 text-red-400 p-1 hover:border-red-700/60 active:bg-gray-800 transition-colors"
+                    >
                       <Pictogram slug={it.exercise} className="w-full h-full" />
-                    </div>
-                    <div className="min-w-0 flex-1">
+                    </button>
+                    <div className="min-w-0 flex-1" onClick={() => setSheet({ slug: it.exercise, name: it.name })} role="button" tabIndex={0}>
                       <p className="text-sm font-semibold text-gray-100 leading-tight">
                         {meta.label}
                         {it.weight_kg != null && (
@@ -184,6 +209,8 @@ export default function WodView({ structure }: { structure: WodStructure }) {
           💡 {structure.notes}
         </p>
       )}
+
+      {sheet && <ExerciseSheet slug={sheet.slug} name={sheet.name} onClose={() => setSheet(null)} />}
     </div>
   )
 }
