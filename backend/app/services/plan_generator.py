@@ -18,6 +18,7 @@ from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.services import ai_client, hyrox_knowledge, record_labels, wod_structure
+from app.services.clock import today_madrid
 from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
 
@@ -263,7 +264,7 @@ def _build_context(user: User, goal: Goal, db: Session) -> dict[str, Any]:
             entry["notes"] = r.notes
         records_list.append(entry)
 
-    today = date.today()
+    today = today_madrid()
     days_until_goal = None
     if goal.target_race_date:
         days_until_goal = (goal.target_race_date - today).days
@@ -373,7 +374,7 @@ def _compute_weeks(goal: Goal) -> int:
     """
     if not goal.target_race_date:
         return 8
-    today = date.today()
+    today = today_madrid()
     monday_this_week = today - timedelta(days=today.weekday())
     race_monday = goal.target_race_date - timedelta(days=goal.target_race_date.weekday())
     weeks_to_race = ((race_monday - monday_this_week).days // 7) + 1
@@ -517,7 +518,7 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
         logger.warning(f"[plan_generator] no se pudo borrar workouts previos: {e}")
         db.rollback()
 
-    today = date.today()
+    today = today_madrid()
     monday_this_week = today - timedelta(days=today.weekday())
     created = 0
     valid_types = {t.value for t in WorkoutType}
@@ -698,7 +699,7 @@ def unlinked_activities(user: User, db: Session, since: date | None = None, limi
     ha sabido colocar). Si `since` es None, últimos 60 días.
     """
     if since is None:
-        since = date.today() - timedelta(days=60)
+        since = today_madrid() - timedelta(days=60)
     start = datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)
     used = _linked_strava_ids(user, db)
     rows = (

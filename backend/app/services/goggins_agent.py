@@ -22,6 +22,7 @@ from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
 from app.services import ai_client, agent_tools, hyrox_knowledge, record_labels, wod_structure
+from app.services.clock import today_madrid, weekday_es
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,12 @@ Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Ú
 - `get_strava_summary(days)` — resumen agregado de lo realmente hecho en Strava (km, tiempo, sesiones, FC media por disciplina) en el periodo. Úsalo para responder con datos a "¿cómo voy?", "¿puedo mejorar?".
 - `compare_planned_vs_actual(start_date, end_date)` — compara lo planificado con lo realmente hecho en el rango. Úsalo para detectar desfases y justificar subir/bajar la carga.
 
+FECHAS (CRÍTICO — aquí es donde más errores se cometen):
+- La fecha de HOY está en `today` del contexto (date, weekday, tomorrow). Es LA ÚNICA verdad: NUNCA deduzcas qué día es por tu cuenta ni por el historial.
+- "el entreno de hoy" = el workout de `upcoming_workouts` con `is_today: true` (o `date == today.date`). "mañana" = `today.tomorrow`. Si el atleta dice un día de la semana ("el del jueves"), busca el `weekday` que coincida MÁS CERCANO en el futuro.
+- Las referencias relativas de mensajes ANTIGUOS del historial ("hoy", "mañana") se referían a SU día, no al actual: no las arrastres.
+- Antes de mover/editar, di en tu respuesta la fecha resuelta con su día ("te muevo el de HOY, sábado 4, al lunes 6") para que el atleta detecte al instante si te equivocas.
+
 REGLAS DE TOOL USE:
 - Los workout_ids están en el contexto que te paso (campo `id` de cada workout en `upcoming_workouts`). Úsalos.
 - Si el atleta pide algo ambiguo ("muéveme el de mañana"), elige el más probable basándote en el contexto y CONFIRMA en tu respuesta qué hiciste.
@@ -100,7 +107,7 @@ def _format_seconds(seconds: int | None) -> str | None:
 
 def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
     """Compila el estado actual del atleta para inyectar como contexto."""
-    today = date.today()
+    today = today_madrid()
 
     # Perfil
     profile = {
@@ -203,6 +210,8 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         {
             "id": w.id,
             "date": w.date.isoformat(),
+            "weekday": weekday_es(w.date),
+            "is_today": w.date == today,
             "type": w.type.value if hasattr(w.type, "value") else w.type,
             "distance_km": w.planned_distance_km,
             "duration_min": w.planned_duration_min,
@@ -245,7 +254,14 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             fitness_snapshot = None
 
     return {
-        "today": today.isoformat(),
+        # Fecha REAL del atleta (hora española). "hoy"/"mañana" se resuelven
+        # SIEMPRE contra esto, nunca contra el conocimiento del modelo.
+        "today": {
+            "date": today.isoformat(),
+            "weekday": weekday_es(today),
+            "tomorrow": (today + timedelta(days=1)).isoformat(),
+            "tomorrow_weekday": weekday_es(today + timedelta(days=1)),
+        },
         "profile": profile,
         "active_goals": goals_list,
         "personal_records": records_list,
@@ -322,7 +338,8 @@ def chat_stream(
         + "\n\n=== CONTEXTO ACTUAL DEL ATLETA ===\n"
         + json.dumps(context, ensure_ascii=False, indent=2, default=str)
         + "\n=== FIN CONTEXTO ===\n"
-        + "\nUsa esos datos y sus IDs cuando contestes. Sé específico con números y fechas reales."
+        + f"\nHOY ES {weekday_es(today_madrid()).upper()} {today_madrid().isoformat()} (hora española). "
+        + "Usa esos datos y sus IDs cuando contestes. Sé específico con números y fechas reales."
     )
 
     history = _load_history(user.id, db, limit=20)

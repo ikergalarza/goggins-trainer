@@ -29,14 +29,14 @@ def test_compute_weeks_carrera_misma_semana_es_1(monkeypatch):
     # Fijamos "hoy" = miércoles 7 enero 2026; la carrera es el viernes de la
     # misma semana → el plan dura 1 semana (la de la competición).
     fake_today = date(2026, 1, 7)  # miércoles
-    monkeypatch.setattr(plan_generator, "date", _FrozenDate(fake_today))
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: fake_today)
     goal = Goal(type=GoalType.race, description="x", target_race_date=date(2026, 1, 9))
     assert _compute_weeks(goal) == 1
 
 
 def test_compute_weeks_carrera_semana_siguiente_es_2(monkeypatch):
     fake_today = date(2026, 1, 7)  # miércoles, semana del lunes 5 ene
-    monkeypatch.setattr(plan_generator, "date", _FrozenDate(fake_today))
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: fake_today)
     # Carrera el lunes 12 ene (semana siguiente) → 2 semanas.
     goal = Goal(type=GoalType.race, description="x", target_race_date=date(2026, 1, 12))
     assert _compute_weeks(goal) == 2
@@ -44,7 +44,7 @@ def test_compute_weeks_carrera_semana_siguiente_es_2(monkeypatch):
 
 def test_compute_weeks_doce_semanas(monkeypatch):
     fake_today = date(2026, 1, 5)  # lunes
-    monkeypatch.setattr(plan_generator, "date", _FrozenDate(fake_today))
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: fake_today)
     # 11 semanas después + la propia semana de carrera = 12.
     race = date(2026, 1, 5) + timedelta(weeks=11)
     goal = Goal(type=GoalType.race, description="x", target_race_date=race)
@@ -53,7 +53,7 @@ def test_compute_weeks_doce_semanas(monkeypatch):
 
 def test_compute_weeks_se_capa_en_30(monkeypatch):
     fake_today = date(2026, 1, 5)
-    monkeypatch.setattr(plan_generator, "date", _FrozenDate(fake_today))
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: fake_today)
     race = date(2026, 1, 5) + timedelta(weeks=60)
     goal = Goal(type=GoalType.race, description="x", target_race_date=race)
     assert _compute_weeks(goal) == 30
@@ -170,17 +170,3 @@ def test_parse_response_json_invalido_devuelve_none():
 # Helper: congelar `date.today()` sin romper date(...) ni la aritmética
 # ────────────────────────────────────────────────────────────────────
 
-def _FrozenDate(frozen: date):
-    """Devuelve una subclase de `date` cuyo `today()` está fijado.
-
-    Se usa con `monkeypatch.setattr(plan_generator, "date", _FrozenDate(x))`.
-    Al ser subclase de `date`, el constructor, `weekday()` y la aritmética con
-    `timedelta` se comportan exactamente igual; solo `today()` cambia.
-    """
-
-    class _Frozen(date):
-        @classmethod
-        def today(cls):
-            return date(frozen.year, frozen.month, frozen.day)
-
-    return _Frozen
