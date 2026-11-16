@@ -110,10 +110,11 @@ export default function Plan() {
       .catch(() => setUnlinked([]))
   }
 
+  // selectedGoalId === -1 → modo COMBINADO: ver todo y generar para todas las carreras.
   const fetchWorkouts = (goalId: number | null) => {
     if (effectiveUserId == null) return
     setLoading(true)
-    const url = goalId
+    const url = goalId && goalId > 0
       ? `/api/plans/${effectiveUserId}?goal_id=${goalId}`
       : `/api/plans/${effectiveUserId}`
     api.get(url)
@@ -149,13 +150,16 @@ export default function Plan() {
 
   const handleGenerate = async () => {
     if (!selectedGoalId || effectiveUserId == null) return
+    const combinado = selectedGoalId === -1
     setGenerating(true)
     setProgress(0)
     setProgressMsg('Iniciando...')
     setStreamChars(0)
     setMsg(null)
 
-    const url = `${API_BASE}/api/plans/generate_stream/${effectiveUserId}/${selectedGoalId}`
+    const url = combinado
+      ? `${API_BASE}/api/plans/generate_stream_combined/${effectiveUserId}`
+      : `${API_BASE}/api/plans/generate_stream/${effectiveUserId}/${selectedGoalId}`
 
     try {
       let res: Response
@@ -413,6 +417,21 @@ export default function Plan() {
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">
+            {/* Plan combinado: una sola periodización para todas las carreras con fecha */}
+            {goals.filter(g => g.target_race_date).length >= 2 && (
+              <button
+                onClick={() => setSelectedGoalId(-1)}
+                className={`min-h-11 px-4 rounded-lg text-sm font-bold transition-colors ${
+                  selectedGoalId === -1
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 active:bg-gray-600'
+                }`}
+                title="Un único plan que encadena todas tus carreras en orden"
+              >
+                🔀 Combinado
+                <span className="ml-2 text-xs opacity-70">{goals.filter(g => g.target_race_date).length} carreras</span>
+              </button>
+            )}
             {goals.map(g => (
               <button
                 key={g.id}

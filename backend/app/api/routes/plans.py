@@ -213,6 +213,38 @@ def delete_plan(user_id: int, goal_id: int, current: User = Depends(get_current_
     return {"deleted": deleted}
 
 
+@router.post("/generate_stream_combined/{user_id}")
+def generate_stream_combined(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Plan COMBINADO: un único plan que periodiza TODOS los objetivos activos
+    con fecha de carrera, en orden (bloque por carrera + transición)."""
+    authorize_user(user_id, current)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    goals = (
+        db.query(Goal)
+        .filter(Goal.user_id == user_id, Goal.is_active == True, Goal.target_race_date.isnot(None))  # noqa: E712
+        .order_by(Goal.target_race_date.asc())
+        .all()
+    )
+    if len(goals) < 2:
+        raise HTTPException(status_code=400, detail="Para un plan combinado necesitas al menos 2 objetivos activos con fecha.")
+
+    def event_generator():
+        try:
+            for event in plan_generator.generate_plan_stream(user, goals[0], db, extra_goals=goals[1:]):
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        except Exception as e:
+            logger.exception(f"[plans] stream combinado error: {e}")
+            yield f"data: {json.dumps({'phase': 'error', 'detail': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
 @router.post("/match_strava/{user_id}")
 def match_strava(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Empareja workouts planificados con actividades de Strava del mismo día."""

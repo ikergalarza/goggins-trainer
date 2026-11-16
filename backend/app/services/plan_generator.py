@@ -381,7 +381,7 @@ def _compute_weeks(goal: Goal) -> int:
     return max(1, min(30, weeks_to_race))
 
 
-def _purge_planned_before_generate(user: User, goal: Goal, db: Session) -> int:
+def _purge_planned_before_generate(user: User, goal: Goal, db: Session, extra_goals: list[Goal] | None = None) -> int:
     """Limpia la pizarra antes de escribir un plan nuevo.
 
     Borra los PLANIFICADOS del mismo objetivo y los planificados huérfanos
@@ -389,11 +389,12 @@ def _purge_planned_before_generate(user: User, goal: Goal, db: Session) -> int:
     borrados) — eran los que hacían reaparecer "semanas viejas" bajo un
     objetivo nuevo. Lo completado/saltado se conserva: es historia.
     """
+    goal_ids = [goal.id] + [g.id for g in (extra_goals or [])]
     n = (
         db.query(Workout)
         .filter(
             Workout.user_id == user.id,
-            (Workout.goal_id == goal.id) | (Workout.goal_id.is_(None)),
+            (Workout.goal_id.in_(goal_ids)) | (Workout.goal_id.is_(None)),
             Workout.status == WorkoutStatus.planned,
         )
         .delete(synchronize_session=False)
@@ -402,13 +403,64 @@ def _purge_planned_before_generate(user: User, goal: Goal, db: Session) -> int:
     return n
 
 
-def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[str, Any]]:
+# ── Plan COMBINADO (varios objetivos con fecha, secuenciados) ─────────────
+
+def _races_in_order(goals: list[Goal]) -> list[Goal]:
+    """Objetivos con fecha de carrera, ordenados por fecha."""
+    dated = [g for g in goals if g.target_race_date]
+    return sorted(dated, key=lambda g: g.target_race_date)
+
+
+def _compute_weeks_combined(goals: list[Goal]) -> int:
+    """Semanas hasta la ÚLTIMA carrera (incluida su semana), tope 30."""
+    races = _races_in_order(goals)
+    if not races:
+        return 8
+    today = today_madrid()
+    monday_this_week = today - timedelta(days=today.weekday())
+    last = races[-1].target_race_date
+    race_monday = last - timedelta(days=last.weekday())
+    weeks = ((race_monday - monday_this_week).days // 7) + 1
+    return max(1, min(30, weeks))
+
+
+def _goal_for_date(races: list[Goal], d: date) -> int:
+    """A qué objetivo pertenece un workout: al de la primera carrera que aún
+    no ha pasado en esa fecha (el bloque A acaba el día de la carrera A)."""
+    for g in races:
+        if d <= g.target_race_date:
+            return g.id
+    return races[-1].id
+
+
+def _combined_races_ctx(races: list[Goal], today: date) -> list[dict[str, Any]]:
+    out = []
+    for i, g in enumerate(races, start=1):
+        t = g.type.value if hasattr(g.type, "value") else g.type
+        out.append({
+            "order": i,
+            "goal_id": g.id,
+            "type": t,
+            "sport": g.sport,
+            "description": g.description,
+            "race_date": g.target_race_date.isoformat(),
+            "days_until": (g.target_race_date - today).days,
+            "target_time": _format_seconds(g.target_time_seconds),
+            "hyrox_division": g.hyrox_division,
+            "race_distance_km": g.target_race_distance_km,
+        })
+    return out
+
+
+def generate_plan_stream(user: User, goal: Goal, db: Session, extra_goals: list[Goal] | None = None) -> Iterator[dict[str, Any]]:
     """Versión streaming: yields events de progreso (phase, message, chunk, done...).
 
     Usa la API de streaming de Anthropic para emitir chunks de texto en
     tiempo real, de modo que el frontend pueda mostrar una barra de progreso.
     """
-    weeks = _compute_weeks(goal)
+    combined = _races_in_order([goal] + (extra_goals or []))
+    is_combined = len(combined) >= 2
+    weeks = _compute_weeks_combined(combined) if is_combined else _compute_weeks(goal)
     is_tri = _is_triathlon(goal)
     logger.info(
         f"[plan_generator] (stream) Generando plan goal={goal.id} weeks={weeks} "
@@ -418,6 +470,9 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
     yield {"phase": "context", "message": f"Analizando tu perfil y volumen reciente ({weeks} semanas)"}
     context = _build_context(user, goal, db)
     context["plan_target_weeks"] = weeks
+    if is_combined:
+        # Secuencia de carreras: el plan debe periodizar TODAS, en orden.
+        context["races_sequence"] = _combined_races_ctx(combined, today_madrid())
 
     if is_tri:
         system_prompt = TRIATHLON_SYSTEM_PROMPT
@@ -430,13 +485,15 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
             "el formato especificado.\n\n"
             f"```json\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}\n```"
         )
-    elif hyrox_knowledge.is_hyrox_goal(goal):
+    elif hyrox_knowledge.is_hyrox_goal(goal) or any(hyrox_knowledge.is_hyrox_goal(g) for g in combined):
         # Hyrox: el prompt base + el conocimiento específico (formato de carrera,
         # pesos de SU división, metodología) + el formato estructurado de WOD.
         system_prompt = (
             SYSTEM_PROMPT
             + "\n\n" + wod_structure.PROMPT_SPEC
-            + "\n\n" + hyrox_knowledge.prompt_block(goal, user)
+            + "\n\n" + hyrox_knowledge.prompt_block(
+                next((g for g in combined if hyrox_knowledge.is_hyrox_goal(g)), goal), user
+            )
         )
         user_message = (
             f"Genera un plan HYROX de {weeks} semanas para este atleta. "
@@ -458,6 +515,21 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
             "Periodízalo correctamente, respeta los días disponibles y calibra la carga "
             "en función del volumen reciente. Devuelve el JSON en el formato especificado.\n\n"
             f"```json\n{json.dumps(context, ensure_ascii=False, indent=2, default=str)}\n```"
+        )
+
+
+    if is_combined:
+        races_txt = " → ".join(
+            f"{i}. {g.description} ({g.target_race_date.isoformat()})" for i, g in enumerate(combined, 1)
+        )
+        user_message = (
+            "PLAN COMBINADO DE VARIAS CARRERAS. Secuencia (en `races_sequence`): "
+            + races_txt + ". Reglas: periodiza TODO el calendario como UN plan: "
+            "bloque específico para la carrera 1 (su semana es la semana de esa carrera, con su taper), "
+            "después 1 semana de recuperación/transición, y bloque de construcción para la siguiente "
+            "carrera hasta su semana. Durante cada bloque MANTÉN una base mínima del otro deporte "
+            "(no lo abandones 8 semanas). La última semana del plan es la de la última carrera.\n\n"
+            + user_message
         )
 
     yield {"phase": "calling_ai", "message": "Pidiendo plan a Claude (puede tardar 30-60s)"}
@@ -513,7 +585,7 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
     yield {"phase": "saving", "message": "Guardando entrenos en la base de datos"}
 
     try:
-        _purge_planned_before_generate(user, goal, db)
+        _purge_planned_before_generate(user, goal, db, extra_goals=extra_goals)
     except Exception as e:
         logger.warning(f"[plan_generator] no se pudo borrar workouts previos: {e}")
         db.rollback()
@@ -535,7 +607,7 @@ def generate_plan_stream(user: User, goal: Goal, db: Session) -> Iterator[dict[s
 
             wk = Workout(
                 user_id=user.id,
-                goal_id=goal.id,
+                goal_id=_goal_for_date(combined, workout_date) if is_combined else goal.id,
                 date=workout_date,
                 week_index=week_idx,
                 day_of_week=dow,

@@ -170,3 +170,44 @@ def test_parse_response_json_invalido_devuelve_none():
 # Helper: congelar `date.today()` sin romper date(...) ni la aritmética
 # ────────────────────────────────────────────────────────────────────
 
+
+
+# ── Plan combinado (varias carreras encadenadas) ────────────────────────────
+
+def test_combined_weeks_hasta_la_ultima_carrera(monkeypatch):
+    from app.services.plan_generator import _compute_weeks_combined
+    fake_today = date(2026, 11, 16)  # lunes
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: fake_today)
+    g1 = Goal(type=GoalType.hyrox, description="Hyrox", target_race_date=date(2027, 2, 7))
+    g2 = Goal(type=GoalType.race, description="Media", target_race_date=date(2027, 4, 4))
+    # Hasta el 4 de abril: lunes 16 nov -> lunes 29 mar = 19 semanas + la de carrera = 20
+    assert _compute_weeks_combined([g2, g1]) == 20
+
+
+def test_goal_for_date_asigna_por_bloques():
+    from app.services.plan_generator import _goal_for_date, _races_in_order
+    g1 = Goal(id=1, type=GoalType.hyrox, description="Hyrox", target_race_date=date(2027, 2, 7))
+    g2 = Goal(id=2, type=GoalType.race, description="Media", target_race_date=date(2027, 4, 4))
+    races = _races_in_order([g2, g1])
+    assert [g.id for g in races] == [1, 2]
+    assert _goal_for_date(races, date(2026, 12, 1)) == 1   # bloque Hyrox
+    assert _goal_for_date(races, date(2027, 2, 7)) == 1    # el día de la carrera aún es su bloque
+    assert _goal_for_date(races, date(2027, 2, 8)) == 2    # transición -> media
+    assert _goal_for_date(races, date(2027, 5, 1)) == 2    # tras la última, a la última
+
+
+def test_purge_combinado_limpia_ambos_objetivos(db, user):
+    from datetime import date as _d
+    from app.models.workout import Workout, WorkoutType, WorkoutStatus
+    from app.services.plan_generator import _purge_planned_before_generate
+    g1 = Goal(user_id=user.id, type=GoalType.hyrox, description="H", target_race_date=_d(2027, 2, 7), is_active=True)
+    g2 = Goal(user_id=user.id, type=GoalType.race, description="M", target_race_date=_d(2027, 4, 4), is_active=True)
+    db.add_all([g1, g2]); db.commit()
+    for g in (g1, g2):
+        db.add(Workout(user_id=user.id, goal_id=g.id, date=_d(2026, 12, 1), type=WorkoutType.easy_run, status=WorkoutStatus.planned))
+    db.add(Workout(user_id=user.id, goal_id=g1.id, date=_d(2026, 11, 1), type=WorkoutType.easy_run, status=WorkoutStatus.completed))
+    db.commit()
+    n = _purge_planned_before_generate(user, g1, db, extra_goals=[g2])
+    assert n == 2
+    restantes = db.query(Workout).filter(Workout.user_id == user.id).all()
+    assert len(restantes) == 1 and restantes[0].status == WorkoutStatus.completed
