@@ -1,4 +1,52 @@
+/* ── Identidad "pizarra de gimnasio" ─────────────────────────────────────
+   Base de hierro caliente (caucho de gimnasio, no gris SaaS azulado), texto
+   tiza, rojo sangre de marca y Big Shoulders (condensada atlética) para
+   títulos y números — el crono de gimnasio es la seña de la app.
+   (La fuente se carga en index.html: el parser de Tailwind v4 rompe con los ';' de la URL de Google Fonts.) Los colores
+   por disciplina viven en workoutMeta y NO se tocan: son información. */
 @import "tailwindcss";
+
+@theme {
+  /* Escala de grises recalibrada a hierro caliente: retinta TODA la app
+     (cada utilidad bg-gray, text-gray o border-gray lee estos tokens). */
+  --color-gray-950: #0f0d0c;
+  --color-gray-900: #1d1917;
+  --color-gray-800: #2b2522;
+  --color-gray-700: #433b36;
+  --color-gray-600: #625750;
+  --color-gray-500: #847971;
+  --color-gray-400: #a69a91;
+  --color-gray-300: #c6bbb2;
+  --color-gray-200: #ddd4cc;
+  --color-gray-100: #ece8e1;
+  --color-gray-50: #f6f3ee;
+
+  /* Rojo de marca: sangre, no neón. */
+  --color-red-400: #f07b66;
+  --color-red-500: #e5503c;
+  --color-red-600: #d93829;
+  --color-red-700: #b42a20;
+  --color-red-800: #8f221c;
+  --color-red-900: #671a17;
+  --color-red-950: #3d0f0e;
+
+  --font-display: "Big Shoulders", "Arial Narrow", system-ui, sans-serif;
+  --font-stencil: "Big Shoulders Stencil", "Big Shoulders", system-ui, sans-serif;
+}
+
+/* La condensada atlética lleva títulos y números: en este código `font-black`
+   marca exactamente los elementos display (títulos, stats, badges). */
+h1, h2, h3, .font-black {
+  font-family: var(--font-display);
+  letter-spacing: 0.015em;
+}
+.font-black {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.font-stencil { font-family: var(--font-stencil); }
+
 
 /* Pictogramas de ejercicio animados (2 fotogramas). Ver components/exercises. */
 @keyframes wod-frame-a {

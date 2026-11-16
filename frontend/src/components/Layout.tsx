@@ -39,8 +39,8 @@ export default function Layout() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-2xl">⚡</span>
-            <span className="text-lg sm:text-xl font-black tracking-tight text-white">GOGGINS</span>
-            <span className="text-lg sm:text-xl font-black tracking-tight text-red-500">TRAINER</span>
+            <span className="font-stencil text-xl sm:text-2xl font-bold tracking-wide text-white">GOGGINS</span>
+            <span className="font-stencil text-xl sm:text-2xl font-bold tracking-wide text-red-500">TRAINER</span>
           </div>
 
           {/* Nav escritorio */}
