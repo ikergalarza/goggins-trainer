@@ -58,6 +58,9 @@ _WORKOUT_STRENGTH = {
 }
 # Brick y transiciones encadenan bici + carrera: aceptan actividad de cualquiera.
 _WORKOUT_BRICK = {"brick", "transition"}
+# El día de la carrera acepta la actividad de CUALQUIER deporte de ese día
+# (Hyrox llega como "Workout", una media como "Run", un triatlón como "Swim"...).
+_WORKOUT_RACE = {"race"}
 
 
 def discipline_for_workout_type(workout_type: str | None) -> str | None:
@@ -78,6 +81,8 @@ def discipline_for_workout_type(workout_type: str | None) -> str | None:
         return "strength"
     if t in _WORKOUT_BRICK:
         return "brick"
+    if t in _WORKOUT_RACE:
+        return "race"
     return None
 
 
@@ -87,6 +92,8 @@ def activity_matches_workout(strava_type: str | None, workout_type: str | None) 
     if wd is None:
         return False
     ad = discipline_for_strava_type(strava_type)
+    if wd == "race":
+        return True
     if wd == "brick":
         return ad in ("bike", "run")
     # La fuerza en Strava suele venir como "Workout"/"WeightTraining" (strength),

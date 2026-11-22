@@ -18,7 +18,7 @@ from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.services import ai_client, hyrox_knowledge, record_labels, wod_duration, wod_structure
-from app.services.clock import today_madrid
+from app.services.clock import today_madrid, weekday_es
 from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
 
@@ -37,10 +37,10 @@ Reglas estrictas:
 - Responde SIEMPRE en español.
 - Devuelve EXCLUSIVAMENTE un JSON válido dentro de un bloque ```json ... ```. Después puedes añadir un párrafo corto de resumen del enfoque.
 - Periodiza el plan: base → construcción → específico → tapering antes de la fecha objetivo (si la hay).
-- IMPORTANTE: Si hay una fecha de carrera, el plan DEBE generar EXACTAMENTE el número de semanas indicado en `plan_target_weeks` y la última semana DEBE ser la semana de la competición. Incluye el día de la carrera como un workout específico (tipo `rest` o el más adecuado) con instrucciones de calentamiento y estrategia.
+- IMPORTANTE: Si hay una fecha de carrera, el plan DEBE generar EXACTAMENTE el número de semanas indicado en `plan_target_weeks` y la última semana DEBE ser la semana de la competición. Incluye el día de la carrera como un workout de type `race` con instrucciones de calentamiento y estrategia (ritmos, nutrición). Tras la carrera NO planifiques nada más en ese bloque.
 - Respeta los días/semana que el atleta puede entrenar.
 - Combina entrenos suaves (Z2), tempo (Z3), umbral (Z4) y series (Z4-Z5). Para Hyrox, alterna running con estaciones de fuerza/funcional.
-- Usa SOLO estos `type` válidos: easy_run, tempo, intervals, long_run, recovery, fartlek, hill_repeats, hyrox_sim, hyrox_stations, strength_upper, strength_lower, strength_full, cross_training, rest.
+- Usa SOLO estos `type` válidos: easy_run, tempo, intervals, long_run, recovery, fartlek, hill_repeats, hyrox_sim, hyrox_stations, strength_upper, strength_lower, strength_full, cross_training, rest, race.
 - `day_of_week`: 0=lunes, 1=martes, ..., 6=domingo.
 - Cada workout DEBE tener instructions claras: estructura del entreno (calentamiento + bloque principal + vuelta a la calma) en 1-3 frases.
 - Usa la información de marcas, ritmos objetivo y volumen actual del atleta para calibrar distancias.
@@ -83,11 +83,11 @@ Reglas estrictas:
   - PEAK (específico): sesiones a ritmo de carrera, brick clave que simula la distancia objetivo, open_water si la carrera es en aguas abiertas, transiciones afinadas.
   - TAPER: baja volumen ~40-60% manteniendo algo de intensidad corta; descarga antes de la competición.
 - ESCALA la carga a la distancia objetivo (sprint < olympic < half < ironman) y a las semanas disponibles (`plan_target_weeks`). A más distancia, sesiones más largas, más bricks y mayor volumen de bici.
-- IMPORTANTE: Si hay fecha de carrera, el plan DEBE generar EXACTAMENTE `plan_target_weeks` semanas y la ÚLTIMA semana DEBE ser la semana de la competición. Incluye el día de la carrera como un workout (tipo `rest` o `brick`) con instrucciones de calentamiento, nutrición y estrategia de transiciones.
+- IMPORTANTE: Si hay fecha de carrera, el plan DEBE generar EXACTAMENTE `plan_target_weeks` semanas y la ÚLTIMA semana DEBE ser la semana de la competición. Incluye el día de la carrera como un workout de type `race` con instrucciones de calentamiento, nutrición y estrategia de transiciones.
 - Frecuencia por disciplina realista: normalmente natación 2-3x, bici 2-3x, carrera 2-3x por semana, ajustando a los días disponibles del atleta. No superes los días/semana que puede entrenar (puede haber 2 sesiones el mismo día en distancias largas si tiene sentido).
 - Calibra cada disciplina con el volumen reciente del atleta por deporte (run/bike/swim). Si faltan datos de natación o bici, asume nivel principiante en esa disciplina y progresa con prudencia.
 - Cada sesión debe llevar la disciplina correcta en `discipline` (swim|bike|run|brick|transition) coherente con su `type`.
-- Usa SOLO estos `type` válidos: swim, swim_technique, open_water, bike, brick, transition, easy_run, tempo, intervals, long_run, recovery, fartlek, hill_repeats, strength_full, strength_lower, cross_training, rest.
+- Usa SOLO estos `type` válidos: swim, swim_technique, open_water, bike, brick, transition, easy_run, tempo, intervals, long_run, recovery, fartlek, hill_repeats, strength_full, strength_lower, cross_training, rest, race.
   - Natación: swim (series/aeróbico), swim_technique (técnica/drills), open_water (aguas abiertas).
   - Ciclismo: bike. Combinado: brick. Transiciones: transition.
   - Carrera: easy_run, tempo, intervals, long_run, recovery, fartlek, hill_repeats.
@@ -325,6 +325,7 @@ def _build_context(user: User, goal: Goal, db: Session) -> dict[str, Any]:
 
     return {
         "today": today.isoformat(),
+        "today_weekday": weekday_es(today),
         "profile": {
             "name": user.name,
             "age": user.age,
@@ -374,38 +375,42 @@ def _compute_weeks(goal: Goal) -> int:
     """
     if not goal.target_race_date:
         return 8
-    today = today_madrid()
-    monday_this_week = today - timedelta(days=today.weekday())
+    start = _plan_start(today_madrid(), goal.target_race_date)
     race_monday = goal.target_race_date - timedelta(days=goal.target_race_date.weekday())
-    weeks_to_race = ((race_monday - monday_this_week).days // 7) + 1
+    weeks_to_race = ((race_monday - start).days // 7) + 1
     return max(1, min(30, weeks_to_race))
 
 
-def _purge_planned_before_generate(user: User, goal: Goal, db: Session) -> int:
-    """Limpia la pizarra antes de escribir un plan nuevo (de UN objetivo).
+def _plan_start(today: date, race_date: date | None = None) -> date:
+    """Lunes en el que arranca la semana 1 del plan.
 
-    Borra los PLANIFICADOS del mismo objetivo y los planificados huérfanos
-    (goal_id NULL: restos de planes previos a la columna o de objetivos
-    borrados) — eran los que hacían reaparecer "semanas viejas" bajo un
-    objetivo nuevo. Lo completado/saltado se conserva: es historia.
+    Entre semana: el lunes de ESTA semana (lo que ya pasó se descarta al
+    guardar). Sábado/domingo: el lunes SIGUIENTE — una semana 1 que ya casi ha
+    terminado no sirve de nada —, salvo que la carrera caiga en esta misma semana.
     """
-    n = (
-        db.query(Workout)
-        .filter(
-            Workout.user_id == user.id,
-            (Workout.goal_id == goal.id) | (Workout.goal_id.is_(None)),
-            Workout.status == WorkoutStatus.planned,
+    monday = today - timedelta(days=today.weekday())
+    if today.weekday() >= 5:
+        nxt = monday + timedelta(days=7)
+        if race_date is None or race_date - timedelta(days=race_date.weekday()) >= nxt:
+            return nxt
+    return monday
+
+
+def _first_week_note(today: date, start_monday: date) -> str:
+    """Recordatorio para la IA sobre desde cuándo se puede planificar."""
+    if today > start_monday:
+        return (
+            f"Hoy es {weekday_es(today)} {today.isoformat()}. La semana 1 empieza el lunes {start_monday.isoformat()}, "
+            "pero los días anteriores a hoy YA PASARON: en la semana 1 planifica SOLO desde hoy en adelante."
         )
-        .delete(synchronize_session=False)
-    )
-    db.commit()
-    return n
+    return f"La semana 1 empieza el lunes {start_monday.isoformat()}."
 
 
 def _purge_all_planned(user: User, db: Session) -> int:
-    """Empezar DE CERO (plan combinado): borra TODO lo planificado del usuario,
-    sea del objetivo que sea (también objetivos viejos/inactivos y huérfanos).
-    El combinado sustituye el calendario entero; lo completado/saltado queda."""
+    """Empezar DE CERO: borra TODO lo planificado del usuario, sea del objetivo
+    que sea (también objetivos viejos/inactivos y huérfanos). Hay UN solo plan en
+    vigor —combinado o individual—, así que generar uno sustituye el calendario
+    entero; lo completado/saltado es historia y se queda."""
     n = (
         db.query(Workout)
         .filter(
@@ -435,7 +440,7 @@ def _combined_blocks(goals: list[Goal], today: date) -> list[dict[str, Any]]:
     """
     races = [g for g in _races_in_order(goals) if g.target_race_date >= today]
     blocks: list[dict[str, Any]] = []
-    start = today - timedelta(days=today.weekday())
+    start = _plan_start(today, races[0].target_race_date if races else None)
     offset = 0
     for g in races:
         race_monday = g.target_race_date - timedelta(days=g.target_race_date.weekday())
@@ -548,8 +553,102 @@ def _stream_ai(system_prompt: str, user_message: str, max_tokens: int, out: dict
     out["raw"] = "".join(raw_parts)
 
 
-def _insert_plan_workouts(db: Session, user: User, data: dict[str, Any], start_monday: date, goal_id: int, week_offset: int = 0) -> int:
-    """Convierte el weekly_plan del JSON en Workouts (sin commit)."""
+def _race_day_instructions(goal: Goal) -> str:
+    """Instrucciones del día de carrera cuando la IA no escribió las suyas."""
+    desc = goal.description
+    if hyrox_knowledge.is_hyrox_goal(goal):
+        return (
+            f"DÍA DE CARRERA — {desc}. Calentamiento de 15-20': trote suave, movilidad de cadera y hombro y 2-3 "
+            "progresivos. El primer km SIEMPRE sale rápido por adrenalina: corre plano. En las estaciones prioriza un "
+            "ritmo sostenible (sled con pasos cortos, wall balls en tandas) y come/bebe según tu plan. "
+            "Todo lo que has entrenado es para hoy."
+        )
+    if _is_triathlon(goal):
+        return (
+            f"DÍA DE CARRERA — {desc}. Llega con tiempo a boxes, revisa material y haz un calentamiento corto de cada "
+            "disciplina. Sal controlado en natación, no revientes la bici (guarda las piernas para correr) y en las "
+            "transiciones ve rápido pero sin prisa."
+        )
+    return (
+        f"DÍA DE CARRERA — {desc}. Calentamiento de 10-15' de trote suave y 3-4 progresivos de 20''. Sal con el ritmo "
+        "objetivo sin pasarte en el primer km, hidrátate en cada avituallamiento y guarda fuerzas para el último tercio."
+    )
+
+
+def _week_of(week_block: dict[str, Any]) -> int:
+    try:
+        return int(week_block.get("week", 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _with_race_day(data: dict[str, Any], goal: Goal, start_monday: date) -> dict[str, Any]:
+    """Garantiza el día de la carrera en el plan de este objetivo.
+
+    Devuelve `data` con: (1) una entrada type `race` en la fecha de la carrera
+    (si la IA puso algo ese día, esa entrada pasa a ser la carrera y conserva
+    sus instrucciones) y (2) nada planificado DESPUÉS de la carrera. Sin fecha
+    de carrera, o con una ya pasada, devuelve `data` tal cual.
+    """
+    race = goal.target_race_date
+    if not race or race < start_monday:
+        return data
+    week_idx = (race - start_monday).days // 7 + 1
+    dow = race.weekday()
+
+    race_instructions: str | None = None
+    plan: list[dict[str, Any]] = []
+    for wb in data.get("weekly_plan") or []:
+        wk = _week_of(wb)
+        if wk > week_idx:
+            continue
+        workouts = list(wb.get("workouts") or [])
+        if wk == week_idx:
+            kept = []
+            for w in workouts:
+                try:
+                    w_dow = int(w.get("day_of_week", 0)) % 7
+                except (TypeError, ValueError):
+                    w_dow = 0
+                if w_dow < dow:
+                    kept.append(w)
+                elif w_dow == dow and not race_instructions:
+                    race_instructions = (w.get("instructions") or "").strip() or None
+            workouts = kept
+        plan.append({**wb, "workouts": workouts})
+
+    block = next((wb for wb in plan if _week_of(wb) == week_idx), None)
+    if block is None:
+        block = {"week": week_idx, "focus": "Semana de carrera", "workouts": []}
+        plan.append(block)
+    block["workouts"].append({
+        "day_of_week": dow,
+        "type": "race",
+        "distance_km": goal.target_race_distance_km,
+        "duration_min": round(goal.target_time_seconds / 60) if goal.target_time_seconds else None,
+        "hr_zone": None,
+        "instructions": race_instructions or _race_day_instructions(goal),
+    })
+    return {**data, "weekly_plan": plan}
+
+
+def _insert_plan_workouts(
+    db: Session,
+    user: User,
+    data: dict[str, Any],
+    start_monday: date,
+    goal_id: int,
+    week_offset: int = 0,
+    goal: Goal | None = None,
+    not_before: date | None = None,
+) -> int:
+    """Convierte el weekly_plan del JSON en Workouts (sin commit).
+
+    `goal` (con fecha de carrera) garantiza el día de la carrera en el plan;
+    `not_before` descarta lo que cayese en el pasado (hoy ya no se puede entrenar ayer).
+    """
+    if goal is not None:
+        data = _with_race_day(data, goal, start_monday)
     created = 0
     valid_types = {t.value for t in WorkoutType}
     for week_block in data.get("weekly_plan", []):
@@ -561,6 +660,8 @@ def _insert_plan_workouts(db: Session, user: User, data: dict[str, Any], start_m
                 type_str = "easy_run"
             dow = int(w.get("day_of_week", 0)) % 7
             workout_date = start_monday + timedelta(weeks=week_idx - 1, days=dow)
+            if not_before is not None and workout_date < not_before:
+                continue
             workout = Workout(
                 user_id=user.id,
                 goal_id=goal_id,
@@ -597,7 +698,9 @@ def generate_plan_stream(user: User, goal: Goal, db: Session, extra_goals: list[
         yield from _generate_combined_stream(user, combined, db)
         return
 
+    today = today_madrid()
     weeks = _compute_weeks(goal)
+    start_monday = _plan_start(today, goal.target_race_date)
     is_tri = _is_triathlon(goal)
     logger.info(
         f"[plan_generator] (stream) Generando plan goal={goal.id} weeks={weeks} "
@@ -607,6 +710,8 @@ def generate_plan_stream(user: User, goal: Goal, db: Session, extra_goals: list[
     yield {"phase": "context", "message": f"Analizando tu perfil y volumen reciente ({weeks} semanas)"}
     context = _build_context(user, goal, db)
     context["plan_target_weeks"] = weeks
+    context["plan_start_monday"] = start_monday.isoformat()
+    context["first_week_note"] = _first_week_note(today, start_monday)
     system_prompt, user_message, per_week = _prompts_for_goal(goal, user, weeks, context)
 
     yield {"phase": "calling_ai", "message": "Pidiendo plan a Claude (puede tardar 30-60s)"}
@@ -641,14 +746,12 @@ def generate_plan_stream(user: User, goal: Goal, db: Session, extra_goals: list[
     yield {"phase": "saving", "message": "Guardando entrenos en la base de datos"}
 
     try:
-        _purge_planned_before_generate(user, goal, db)
+        _purge_all_planned(user, db)
     except Exception as e:
         logger.warning(f"[plan_generator] no se pudo borrar workouts previos: {e}")
         db.rollback()
 
-    today = today_madrid()
-    monday_this_week = today - timedelta(days=today.weekday())
-    created = _insert_plan_workouts(db, user, data, monday_this_week, goal.id)
+    created = _insert_plan_workouts(db, user, data, start_monday, goal.id, goal=goal, not_before=today)
 
     try:
         db.commit()
@@ -703,6 +806,8 @@ def _generate_combined_stream(user: User, races: list[Goal], db: Session) -> Ite
         context = _build_context(user, g, db)
         context["plan_target_weeks"] = b["weeks"]
         context["races_sequence"] = races_ctx
+        context["plan_start_monday"] = b["start_monday"].isoformat()
+        context["first_week_note"] = _first_week_note(today, b["start_monday"])
         system_prompt, user_message, per_week = _prompts_for_goal(g, user, b["weeks"], context)
 
         pre = (
@@ -757,7 +862,7 @@ def _generate_combined_stream(user: User, races: list[Goal], db: Session) -> Ite
     created = 0
     all_phases: list[dict[str, Any]] = []
     for b, data, _summary in parsed:
-        created += _insert_plan_workouts(db, user, data, b["start_monday"], b["goal"].id, week_offset=b["offset"])
+        created += _insert_plan_workouts(db, user, data, b["start_monday"], b["goal"].id, week_offset=b["offset"], goal=b["goal"], not_before=today)
         for ph in data.get("phases", []) or []:
             if isinstance(ph, dict):
                 all_phases.append({**ph, "race": b["goal"].description})

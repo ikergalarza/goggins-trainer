@@ -36,6 +36,7 @@ class WorkoutType(str, enum.Enum):
     open_water = "open_water"            # natación en aguas abiertas
     # Otros
     rest = "rest"
+    race = "race"                        # día de la carrera (competición)
 
 
 class Workout(Base):

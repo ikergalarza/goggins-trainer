@@ -14,7 +14,8 @@ from app.api.deps import get_current_user, authorize_user
 from app.models.user import User
 from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
-from app.services import plan_generator
+from app.services import current_plan as current_plan_svc, plan_generator
+from app.services.clock import today_madrid
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/plans", tags=["plans"])
@@ -94,6 +95,39 @@ def generate_stream(user_id: int, goal_id: int, current: User = Depends(get_curr
             "Connection": "keep-alive",
         },
     )
+
+
+@router.get("/{user_id}/current")
+def current_plan(user_id: int, current: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """El plan EN VIGOR: uno solo, combinado o individual, con sus objetivos y entrenos.
+
+    Generar un plan sustituye todo lo planificado, así que el plan se deduce de
+    los datos (ver services/current_plan). La vista lo enseña entero, sin
+    pestañas por objetivo que lo partan en trozos.
+    """
+    authorize_user(user_id, current)
+    goals = current_plan_svc.plan_goals(user_id, db, today_madrid())
+    workouts = []
+    if goals:
+        workouts = (
+            db.query(Workout)
+            .filter(Workout.user_id == user_id, Workout.goal_id.in_([g.id for g in goals]))
+            .order_by(Workout.date.asc())
+            .all()
+        )
+    return {
+        "kind": current_plan_svc.plan_kind(goals),
+        "goals": [
+            {
+                "id": g.id,
+                "description": g.description,
+                "type": g.type.value if hasattr(g.type, "value") else g.type,
+                "target_race_date": g.target_race_date.isoformat() if g.target_race_date else None,
+            }
+            for g in goals
+        ],
+        "workouts": [_serialize_workout(w) for w in workouts],
+    }
 
 
 @router.get("/{user_id}")
@@ -371,6 +405,6 @@ def unlinked(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    since = date.today() - _dt.timedelta(days=days)
+    since = today_madrid() - _dt.timedelta(days=days)
     acts = plan_generator.unlinked_activities(user, db, since=since)
     return [_serialize_activity_brief(a) for a in acts]

@@ -36,19 +36,3 @@ def test_borrar_objetivo_se_lleva_sus_workouts(db, user):
     out = delete_goal(user.id, g.id, current=user, db=db)
     assert out["workouts_deleted"] == 2
     assert db.query(Workout).filter(Workout.user_id == user.id).count() == 0
-
-
-def test_generar_purga_planificados_del_goal_y_huerfanos(db, user):
-    from app.services.plan_generator import _purge_planned_before_generate
-    g = _goal(db, user)
-    keep_done = _w(db, user, g.id, date(2026, 9, 10), status=WorkoutStatus.completed)
-    _w(db, user, g.id, date(2026, 9, 20))          # planificado del goal -> fuera
-    _w(db, user, None, date(2026, 8, 1))           # huérfano planificado -> fuera
-    other = _goal(db, user, "10k")
-    keep_other = _w(db, user, other.id, date(2026, 9, 21))  # de OTRO goal -> se queda
-
-    n = _purge_planned_before_generate(user, g, db)
-
-    assert n == 2
-    ids = {w.id for w in db.query(Workout).filter(Workout.user_id == user.id).all()}
-    assert ids == {keep_done.id, keep_other.id}

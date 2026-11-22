@@ -67,6 +67,7 @@ ENUM_VALUES_TO_ADD = [
             "cross_training",
             "mobility",
             "rest",
+            "race",
             # Triatlón / natación / ciclismo
             "swim",
             "bike",

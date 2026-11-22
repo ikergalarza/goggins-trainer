@@ -303,11 +303,13 @@ def test_generate_combinado_un_bloque_por_carrera(db, user, monkeypatch):
     assert [(w.type, str(w.date), w.week_index, w.goal_id) for w in ws] == [
         (WorkoutType.hyrox_stations, "2026-11-16", 1, hyrox.id),
         (WorkoutType.easy_run, "2026-11-25", 2, hyrox.id),
+        (WorkoutType.race, "2027-02-07", 12, hyrox.id),   # día de la carrera 1 (siempre sale)
         (WorkoutType.recovery, "2027-02-08", 13, media.id),
         (WorkoutType.long_run, "2027-02-21", 14, media.id),
+        (WorkoutType.race, "2027-04-04", 20, media.id),   # día de la carrera 2
     ]
     # La prueba vieja se purgó; lo completado se conserva
     assert db.query(Workout).filter(Workout.goal_id == viejo.id).count() == 0
     assert db.query(Workout).filter(Workout.status == WorkoutStatus.completed).count() == 1
-    assert done["workouts_created"] == 4
+    assert done["workouts_created"] == 6   # 4 de la IA + las 2 carreras
     assert done["weeks"] == 20
