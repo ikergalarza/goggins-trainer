@@ -17,7 +17,7 @@ from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
-from app.services import ai_client, hyrox_knowledge, record_labels, wod_duration, wod_structure
+from app.services import ai_client, current_plan, hyrox_knowledge, record_labels, wod_duration, wod_structure
 from app.services.clock import today_madrid, weekday_es
 from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
@@ -630,6 +630,46 @@ def _with_race_day(data: dict[str, Any], goal: Goal, start_monday: date) -> dict
         "instructions": race_instructions or _race_day_instructions(goal),
     })
     return {**data, "weekly_plan": plan}
+
+
+_RACE_TEXT_RE = re.compile(r"carrera|competici|race|prueba|hyrox", re.I)
+
+
+def backfill_race_days(db: Session) -> int:
+    """Planes YA generados: añade el día de carrera que les falta (idempotente).
+
+    Para cada objetivo del plan en vigor con carrera futura y sin entrada `race`
+    en su fecha: si la IA dejó algo planificado ese día, pasa a ser la carrera
+    (conserva sus instrucciones solo si hablan de la carrera; un rodaje no
+    pasa a "estrategia de competición"); si no, se crea. Devuelve cuántas.
+    """
+    today = today_madrid()
+    changed = 0
+    user_ids = {r[0] for r in db.query(Workout.user_id).filter(Workout.status == WorkoutStatus.planned).distinct().all()}
+    for uid in user_ids:
+        for g in current_plan.plan_goals(uid, db, today):
+            race = g.target_race_date
+            if not race or race < today:
+                continue
+            same_day = db.query(Workout).filter(Workout.user_id == uid, Workout.goal_id == g.id, Workout.date == race).all()
+            if any(w.type == WorkoutType.race for w in same_day):
+                continue
+            planned = [w for w in same_day if w.status == WorkoutStatus.planned]
+            w = planned[0] if planned else Workout(user_id=uid, goal_id=g.id, date=race, status=WorkoutStatus.planned, modified_by="ai")
+            keep = bool(w.instructions and _RACE_TEXT_RE.search(w.instructions))
+            w.type = WorkoutType.race
+            w.day_of_week = race.weekday()
+            w.planned_distance_km = g.target_race_distance_km
+            w.planned_duration_min = round(g.target_time_seconds / 60) if g.target_time_seconds else None
+            w.planned_heart_rate_zone = None
+            w.structure = None
+            if not keep:
+                w.instructions = _race_day_instructions(g)
+            db.add(w)
+            changed += 1
+    if changed:
+        db.commit()
+    return changed
 
 
 def _insert_plan_workouts(

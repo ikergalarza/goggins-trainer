@@ -359,11 +359,14 @@ _HEDGE_RE = re.compile(r"\b(no|nunca|tampoco|todav[ií]a|a[uú]n|sin|si\s+quiere
 _ASKS_RE = re.compile(
     r"\b(?:m[eé]te(?:me|lo|la|los|las)?|a[ñn][aá]de(?:me|lo|la)?|agrega(?:me|lo|la)?|pon(?:me|le|lo|la|los|las)?|"
     r"quita(?:me|lo|la|los|las)?|borra(?:me|lo|la|los|las)?|elimina(?:me|lo|la)?|mu[eé]ve(?:me|lo|la)?|"
-    r"cambia(?:me|lo|la)?|ajusta(?:me|lo|la)?|sube|baja|desplaza|programa(?:me)?|apunta(?:me)?|inclu[yi]e?|"
-    r"reduce|aumenta|sustituye|reemplaza|haz(?:me)?|crea(?:me)?|quiero|necesito|puedes|podr[ií]as)\b"
-    r"|un d[ií]a m[aá]s|otro d[ií]a|m[aá]s d[ií]as",
+    r"cambia(?:me|lo|la)?|ajusta(?:me|lo|la)?|desplaza|programa(?:me)?|apunta(?:me)?|sustituye|reemplaza)\b"
+    r"|\b(?:sube|baja|reduce|aumenta)(?:me)?\s+(?:la|el|los|las)\s+(?:carga|volumen|intensidad|km|kil[oó]metros|semana)"
+    r"|\b(?:quiero|necesito)\s+(?:entrenar|un|otro|m[aá]s)\b"
+    r"|un d[ií]a m[aá]s|otro d[ií]a de entreno|m[aá]s d[ií]as de entreno",
     re.I,
 )
+# Una pregunta explícita o un ofrecimiento ("si quieres lo hago") no es una promesa incumplida.
+_QUESTION_OR_OFFER_RE = re.compile(r"¿|\b(?:d[ií]melo|dime\s+si|si\s+quieres|si\s+prefieres|av[ií]same)\b", re.I)
 
 
 def claims_plan_change(text: str) -> bool:
@@ -394,6 +397,12 @@ _GUARD_MESSAGE = (
     "ninguna herramienta de edición, así que el plan NO ha cambiado. Ejecuta AHORA la herramienta que corresponda "
     "y, cuando tengas su resultado, confirma. Si en realidad no tocaba cambiar nada, corrige tu respuesta sin "
     "afirmar cambios."
+)
+_PROMISE_MESSAGE = (
+    "[SISTEMA] El atleta te ha pedido un cambio en el plan y has terminado el turno sin ejecutar ninguna herramienta "
+    "ni hacerle una pregunta, así que el plan NO ha cambiado. Ejecuta AHORA la herramienta que corresponda (mira "
+    "`calendar` del contexto para las fechas). Si te falta un dato imprescindible, PREGÚNTALO con una pregunta "
+    "explícita (¿...?). No prometas cambios: o los ejecutas o preguntas."
 )
 _NO_CHANGE_NOTICE = (
     "\n\nAviso: No he ejecutado ningún cambio en tu plan. Pídemelo otra vez con el día exacto y lo hago."
@@ -471,6 +480,7 @@ def chat_stream(
     mutations: list[dict[str, Any]] = []
     wants_change = asks_plan_change(user_message)
     changed_plan = False      # ¿alguna tool de edición terminó con éxito en este turno?
+    tool_calls = 0            # nº de tools ejecutadas en este turno (lectura o edición)
     retried = False
 
     try:
@@ -504,16 +514,22 @@ def chat_stream(
             )
 
             if final_msg.stop_reason != "tool_use":
-                dice_que_cambio = claims_plan_change("".join(iteration_text))
-                if wants_change and dice_que_cambio and not changed_plan:
+                texto = "".join(iteration_text)
+                afirma = wants_change and claims_plan_change(texto)
+                # Promesa implícita ("empezamos ya"): le pidieron un cambio y terminó el turno
+                # sin tocar ninguna tool ni preguntar nada.
+                promete = (
+                    wants_change and tool_calls == 0 and bool(texto.strip())
+                    and not _QUESTION_OR_OFFER_RE.search(texto)
+                )
+                if (afirma or promete) and not changed_plan:
                     if not retried:
-                        # Afirmó un cambio sin ejecutarlo: se retira ese texto y se le
-                        # obliga a ejecutar la tool (o a corregirse).
+                        # Se retira ese texto y se le obliga a ejecutar la tool (o a preguntar).
                         retried = True
                         if iteration_text:
                             final_text_parts.pop()
                         yield {"phase": "retract"}
-                        messages.append({"role": "user", "content": _GUARD_MESSAGE})
+                        messages.append({"role": "user", "content": _GUARD_MESSAGE if afirma else _PROMISE_MESSAGE})
                         continue
                     final_text_parts.append(_NO_CHANGE_NOTICE.strip())
                     yield {"phase": "chunk", "text": _NO_CHANGE_NOTICE}
@@ -526,6 +542,7 @@ def chat_stream(
                     continue
                 tool_name = block.name
                 tool_input = block.input or {}
+                tool_calls += 1
                 yield {"phase": "tool_use", "name": tool_name, "input": tool_input}
 
                 result = agent_tools.execute_tool(tool_name, tool_input, user, db)

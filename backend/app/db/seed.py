@@ -76,3 +76,20 @@ def backfill_wod_durations() -> None:
         db.rollback()
     finally:
         db.close()
+
+
+def backfill_race_days() -> None:
+    """Corrige al arrancar los planes YA generados: añade el día de carrera que les
+    faltaba. Idempotente y nunca impide arrancar."""
+    from app.services import plan_generator
+
+    db: Session = SessionLocal()
+    try:
+        n = plan_generator.backfill_race_days(db)
+        if n:
+            logger.info(f"[backfill] Día de carrera añadido en {n} objetivo(s) del plan")
+    except Exception as e:
+        logger.warning(f"[backfill] No se pudo añadir el día de carrera: {e}")
+        db.rollback()
+    finally:
+        db.close()

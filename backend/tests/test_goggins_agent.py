@@ -86,6 +86,9 @@ def test_el_historial_acepta_fechas_sin_zona_horaria(db, user):
     "Añadido el entreno del jueves.",
     "He cambiado tu tempo por series.",
     "Listo: ya está en tu plan.",
+    # textos reales de producción
+    "Tienes razón. Dije que lo hacía y no ejecuté la herramienta. Fallo mío. Lo meto AHORA.",
+    "Ahora sí. Viernes 27/11 metido: compromised de 4 rondas con sled push a 152 kg (id 1167).",
 ])
 def test_detecta_cuando_afirma_un_cambio(texto):
     assert goggins_agent.claims_plan_change(texto)
@@ -114,8 +117,18 @@ def test_detecta_cuando_el_atleta_pide_un_cambio(texto):
     assert goggins_agent.asks_plan_change(texto)
 
 
-def test_una_pregunta_no_es_una_peticion_de_cambio():
-    assert not goggins_agent.asks_plan_change("¿cómo voy de volumen esta semana?")
+@pytest.mark.parametrize("texto", [
+    "¿cómo voy de volumen esta semana?",
+    "quiero saber cuántos km llevo",
+    "¿puedes explicarme qué es el umbral?",
+    "dime qué tengo mañana",
+])
+def test_una_consulta_no_es_una_peticion_de_cambio(texto):
+    assert not goggins_agent.asks_plan_change(texto)
+
+
+def test_baja_la_carga_si_es_una_peticion():
+    assert goggins_agent.asks_plan_change("baja la carga de esta semana")
 
 
 # --- bucle del agente con un cliente de IA simulado ---------------------------
@@ -238,3 +251,54 @@ def test_el_mensaje_actual_va_con_su_fecha_y_hora_pero_se_guarda_limpio(db, user
     assert db.query(ChatMessage).filter_by(role="user").one().content == "hola"
     # y el sistema recuerda que es domingo y cuál es la semana que viene
     assert "DOMINGO 2026-11-22" in llamadas[0]["system"]
+
+
+# --- promesa implícita: "empezamos ya" sin ejecutar nada ni preguntar -----------
+
+PROMESA = ("Aviso de hierro: 6 días/semana con cero km reales las últimas 2 semanas es un salto brutal. "
+           "Pero empezamos ya. Who's gonna carry the boats?")
+
+
+def test_una_promesa_sin_ejecutar_ni_preguntar_tambien_se_corrige(db, user, monkeypatch):
+    llamadas = _fake_ai(monkeypatch, [
+        (PROMESA, [_Text(PROMESA)], "end_turn"),
+        ("", [_ToolUse("t1", "add_workout", {"date": "2026-11-27", "type": "easy_run"})], "tool_use"),
+        ("Viernes 27 metido.", [_Text("Viernes 27 metido.")], "end_turn"),
+    ])
+    eventos = _correr(user, db, "mete un día más de entrenamiento a la semana")
+    assert {"phase": "retract"} in eventos
+    assert "ejecutar ninguna herramienta ni hacerle una pregunta" in llamadas[1]["messages"][-1]["content"]
+    assert db.query(Workout).count() == 1
+    assert eventos[-1]["content"] == "Viernes 27 metido."
+
+
+@pytest.mark.parametrize("respuesta", [
+    "¿Qué día prefieres para la sesión extra?",
+    "Si quieres lo meto el viernes; dímelo y lo hago.",
+])
+def test_preguntar_o_ofrecer_no_es_una_promesa(db, user, monkeypatch, respuesta):
+    llamadas = _fake_ai(monkeypatch, [(respuesta, [_Text(respuesta)], "end_turn")])
+    eventos = _correr(user, db, "mete un día más de entrenamiento a la semana")
+    assert len(llamadas) == 1 and {"phase": "retract"} not in eventos
+
+
+def test_una_consulta_con_respuesta_normal_no_se_reintenta(db, user, monkeypatch):
+    llamadas = _fake_ai(monkeypatch, [("Llevas 40 km esta semana.", [_Text("Llevas 40 km esta semana.")], "end_turn")])
+    _correr(user, db, "quiero saber cuántos km llevo")
+    assert len(llamadas) == 1
+
+
+def test_si_ya_consulto_datos_no_se_considera_promesa(db, user, monkeypatch):
+    """Tras mirar el plan, explicar que ya tiene ese día cubierto no es incumplir."""
+    llamadas = _fake_ai(monkeypatch, [
+        ("", [_ToolUse("t1", "list_workouts", {})], "tool_use"),
+        ("Ya tienes entreno todos los días de esa semana.", [_Text("Ya tienes entreno todos los días de esa semana.")], "end_turn"),
+    ])
+    eventos = _correr(user, db, "mete un entreno el viernes")
+    assert len(llamadas) == 2 and {"phase": "retract"} not in eventos
+
+
+def test_si_tras_el_aviso_sigue_prometiendo_se_le_avisa_al_atleta(db, user, monkeypatch):
+    _fake_ai(monkeypatch, [(PROMESA, [_Text(PROMESA)], "end_turn"), (PROMESA, [_Text(PROMESA)], "end_turn")])
+    done = _correr(user, db, "mete un día más de entrenamiento a la semana")[-1]
+    assert "No he ejecutado ningún cambio" in done["content"] and done["mutations"] == []

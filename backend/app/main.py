@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from app.api.routes import strava, profile, records, goals, ai, plans, chat, auth, social
 from app.db.database import engine, Base
 from app.db.migrations import ensure_schema
-from app.db.seed import backfill_wod_durations, seed_master
+from app.db.seed import backfill_race_days, backfill_wod_durations, seed_master
 import app.models  # noqa
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
     ensure_schema(engine)
     seed_master()
     backfill_wod_durations()
+    backfill_race_days()
     yield
 
 

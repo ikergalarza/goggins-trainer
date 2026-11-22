@@ -105,3 +105,83 @@ def test_el_plan_generado_guarda_la_carrera_en_su_dia_y_con_su_objetivo(db, user
     assert n == 3
     assert [(str(w.date), w.goal_id, w.week_index, w.status) for w in carrera] == [
         ("2026-12-06", hyrox.id, 2, WorkoutStatus.planned)]
+
+
+# --- planes YA generados: se les añade el día de carrera que les falta ---------
+
+HOY = date(2026, 11, 22)
+
+
+def _plan_combinado_sin_carreras(db, user, monkeypatch):
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: HOY)
+    hyrox = Goal(user_id=user.id, type=GoalType.hyrox, description="Hyrox Bilbao",
+                 target_race_date=date(2027, 2, 7), is_active=True)
+    media = Goal(user_id=user.id, type=GoalType.race, description="Media SS", target_race_distance_km=21.1,
+                 target_race_date=date(2027, 4, 4), is_active=True)
+    db.add_all([hyrox, media]); db.commit()
+    for g, dia in ((hyrox, date(2026, 11, 24)), (media, date(2027, 3, 2))):
+        db.add(Workout(user_id=user.id, goal_id=g.id, date=dia, type=WorkoutType.easy_run, status=WorkoutStatus.planned))
+    db.commit()
+    return hyrox, media
+
+
+def test_el_plan_ya_generado_recibe_sus_dias_de_carrera(db, user, monkeypatch):
+    hyrox, media = _plan_combinado_sin_carreras(db, user, monkeypatch)
+    assert plan_generator.backfill_race_days(db) == 2
+    carreras = db.query(Workout).filter(Workout.type == WorkoutType.race).order_by(Workout.date).all()
+    assert [(str(w.date), w.goal_id, w.planned_distance_km) for w in carreras] == [
+        ("2027-02-07", hyrox.id, None), ("2027-04-04", media.id, 21.1)]
+    assert all(w.instructions and w.status == WorkoutStatus.planned for w in carreras)
+
+
+def test_es_idempotente(db, user, monkeypatch):
+    _plan_combinado_sin_carreras(db, user, monkeypatch)
+    plan_generator.backfill_race_days(db)
+    assert plan_generator.backfill_race_days(db) == 0
+    assert db.query(Workout).filter(Workout.type == WorkoutType.race).count() == 2
+
+
+def test_lo_que_la_ia_puso_el_dia_de_la_carrera_pasa_a_ser_la_carrera(db, user, monkeypatch):
+    hyrox, _ = _plan_combinado_sin_carreras(db, user, monkeypatch)
+    db.add(Workout(user_id=user.id, goal_id=hyrox.id, date=date(2027, 2, 7), type=WorkoutType.rest,
+                   status=WorkoutStatus.planned, instructions="Día de carrera: sal controlado en el sled."))
+    db.commit()
+    plan_generator.backfill_race_days(db)
+    ese_dia = db.query(Workout).filter(Workout.goal_id == hyrox.id, Workout.date == date(2027, 2, 7)).all()
+    assert len(ese_dia) == 1 and ese_dia[0].type == WorkoutType.race
+    assert "sal controlado en el sled" in ese_dia[0].instructions      # conserva su estrategia
+
+
+def test_no_convierte_un_entreno_normal_en_la_carrera_conservando_sus_instrucciones(db, user, monkeypatch):
+    hyrox, _ = _plan_combinado_sin_carreras(db, user, monkeypatch)
+    db.add(Workout(user_id=user.id, goal_id=hyrox.id, date=date(2027, 2, 7), type=WorkoutType.easy_run,
+                   status=WorkoutStatus.planned, instructions="Rodaje de 5 km muy suave."))
+    db.commit()
+    plan_generator.backfill_race_days(db)
+    w = db.query(Workout).filter(Workout.goal_id == hyrox.id, Workout.date == date(2027, 2, 7)).one()
+    assert w.type == WorkoutType.race and "Rodaje" not in w.instructions
+
+
+def test_ignora_carreras_pasadas_y_objetivos_que_no_estan_en_el_plan(db, user, monkeypatch):
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: HOY)
+    pasada = Goal(user_id=user.id, type=GoalType.race, description="Vieja", target_race_date=date(2026, 10, 1), is_active=True)
+    sin_plan = Goal(user_id=user.id, type=GoalType.race, description="Otra", target_race_date=date(2027, 5, 1), is_active=True)
+    en_plan = Goal(user_id=user.id, type=GoalType.race, description="Esta", target_race_date=date(2027, 3, 1), is_active=True)
+    db.add_all([pasada, sin_plan, en_plan]); db.commit()
+    for g in (pasada, en_plan):
+        db.add(Workout(user_id=user.id, goal_id=g.id, date=date(2026, 11, 25), type=WorkoutType.easy_run, status=WorkoutStatus.planned))
+    db.commit()
+    assert plan_generator.backfill_race_days(db) == 1
+    assert [w.goal_id for w in db.query(Workout).filter(Workout.type == WorkoutType.race)] == [en_plan.id]
+
+
+def test_el_arranque_añade_los_dias_de_carrera_y_no_rompe_si_falla(db, user, monkeypatch):
+    from app.db import seed
+    _plan_combinado_sin_carreras(db, user, monkeypatch)
+    monkeypatch.setattr(seed, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+    seed.backfill_race_days()
+    assert db.query(Workout).filter(Workout.type == WorkoutType.race).count() == 2
+    # si el cálculo explota, el arranque sigue (solo avisa)
+    monkeypatch.setattr(plan_generator, "backfill_race_days", lambda _db: (_ for _ in ()).throw(RuntimeError("boom")))
+    seed.backfill_race_days()
