@@ -110,13 +110,17 @@ export default function Plan() {
       .catch(() => setUnlinked([]))
   }
 
-  // selectedGoalId === -1 → modo COMBINADO: ver todo y generar para todas las carreras.
+  // selectedGoalId === -1 → modo COMBINADO: las carreras con fecha, en un solo calendario.
   const fetchWorkouts = (goalId: number | null) => {
     if (effectiveUserId == null) return
     setLoading(true)
+    // En combinado se filtra a los objetivos del combo: sin filtro venía TODO
+    // el histórico (Strava, objetivos viejos) y el plan quedaba enterrado
+    // bajo meses de semanas pasadas con la numeración desplazada.
+    const comboIds = goals.filter(g => g.target_race_date).map(g => g.id).join(',')
     const url = goalId && goalId > 0
       ? `/api/plans/${effectiveUserId}?goal_id=${goalId}`
-      : `/api/plans/${effectiveUserId}`
+      : `/api/plans/${effectiveUserId}${comboIds ? `?goal_ids=${comboIds}` : ''}`
     api.get(url)
       .then(r => setWorkouts(r.data))
       .catch(() => setWorkouts([]))
@@ -126,7 +130,7 @@ export default function Plan() {
 
   useEffect(() => {
     if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
-  }, [selectedGoalId])
+  }, [selectedGoalId, goals])
 
   // Escucha mutaciones del plan desde otras páginas (p.ej. chat Goggins) y
   // recarga también al volver el foco/visibilidad a la pestaña, por si la
@@ -146,7 +150,7 @@ export default function Plan() {
       window.removeEventListener('focus', reload)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [selectedGoalId])
+  }, [selectedGoalId, goals])
 
   const handleGenerate = async () => {
     if (!selectedGoalId || effectiveUserId == null) return

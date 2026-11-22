@@ -172,42 +172,142 @@ def test_parse_response_json_invalido_devuelve_none():
 
 
 
-# ── Plan combinado (varias carreras encadenadas) ────────────────────────────
+# ── Plan combinado (varias carreras encadenadas, UN bloque por carrera) ──────
 
-def test_combined_weeks_hasta_la_ultima_carrera(monkeypatch):
-    from app.services.plan_generator import _compute_weeks_combined
-    fake_today = date(2026, 11, 16)  # lunes
-    monkeypatch.setattr(plan_generator, "today_madrid", lambda: fake_today)
-    g1 = Goal(type=GoalType.hyrox, description="Hyrox", target_race_date=date(2027, 2, 7))
-    g2 = Goal(type=GoalType.race, description="Media", target_race_date=date(2027, 4, 4))
-    # Hasta el 4 de abril: lunes 16 nov -> lunes 29 mar = 19 semanas + la de carrera = 20
-    assert _compute_weeks_combined([g2, g1]) == 20
-
-
-def test_goal_for_date_asigna_por_bloques():
-    from app.services.plan_generator import _goal_for_date, _races_in_order
+def test_combined_blocks_reparte_semanas_por_carrera(monkeypatch):
+    """16 nov → Hyrox 7 feb (12 sem) y después media 4 abr (8 sem, desde el
+    lunes siguiente a la carrera 1). week_index global continuo."""
+    from app.services.plan_generator import _combined_blocks
     g1 = Goal(id=1, type=GoalType.hyrox, description="Hyrox", target_race_date=date(2027, 2, 7))
     g2 = Goal(id=2, type=GoalType.race, description="Media", target_race_date=date(2027, 4, 4))
-    races = _races_in_order([g2, g1])
-    assert [g.id for g in races] == [1, 2]
-    assert _goal_for_date(races, date(2026, 12, 1)) == 1   # bloque Hyrox
-    assert _goal_for_date(races, date(2027, 2, 7)) == 1    # el día de la carrera aún es su bloque
-    assert _goal_for_date(races, date(2027, 2, 8)) == 2    # transición -> media
-    assert _goal_for_date(races, date(2027, 5, 1)) == 2    # tras la última, a la última
+    blocks = _combined_blocks([g2, g1], today=date(2026, 11, 16))
+    assert [b["goal"].id for b in blocks] == [1, 2]
+    assert blocks[0]["start_monday"] == date(2026, 11, 16)
+    assert blocks[0]["weeks"] == 12
+    assert blocks[0]["offset"] == 0
+    assert blocks[1]["start_monday"] == date(2027, 2, 8)  # lunes tras la carrera 1
+    assert blocks[1]["weeks"] == 8
+    assert blocks[1]["offset"] == 12
+    assert sum(b["weeks"] for b in blocks) == 20
 
 
-def test_purge_combinado_limpia_ambos_objetivos(db, user):
+def test_combined_blocks_ignora_carreras_pasadas():
+    from app.services.plan_generator import _combined_blocks
+    pasada = Goal(id=1, type=GoalType.race, description="Vieja", target_race_date=date(2026, 4, 4))
+    futura = Goal(id=2, type=GoalType.hyrox, description="Hyrox", target_race_date=date(2027, 2, 7))
+    blocks = _combined_blocks([pasada, futura], today=date(2026, 11, 16))
+    assert [b["goal"].id for b in blocks] == [2]
+
+
+def test_purge_all_planned_limpia_todo_lo_planificado(db, user):
+    """Regenerar el combinado EMPIEZA DE CERO: borra lo planificado de TODOS los
+    objetivos (también viejos/inactivos) y los huérfanos; lo completado queda."""
     from datetime import date as _d
     from app.models.workout import Workout, WorkoutType, WorkoutStatus
-    from app.services.plan_generator import _purge_planned_before_generate
+    from app.services.plan_generator import _purge_all_planned
     g1 = Goal(user_id=user.id, type=GoalType.hyrox, description="H", target_race_date=_d(2027, 2, 7), is_active=True)
-    g2 = Goal(user_id=user.id, type=GoalType.race, description="M", target_race_date=_d(2027, 4, 4), is_active=True)
-    db.add_all([g1, g2]); db.commit()
-    for g in (g1, g2):
-        db.add(Workout(user_id=user.id, goal_id=g.id, date=_d(2026, 12, 1), type=WorkoutType.easy_run, status=WorkoutStatus.planned))
+    viejo = Goal(user_id=user.id, type=GoalType.race, description="Prueba vieja", is_active=False)
+    db.add_all([g1, viejo]); db.commit()
+    db.add(Workout(user_id=user.id, goal_id=g1.id, date=_d(2026, 12, 1), type=WorkoutType.easy_run, status=WorkoutStatus.planned))
+    db.add(Workout(user_id=user.id, goal_id=viejo.id, date=_d(2026, 12, 2), type=WorkoutType.tempo, status=WorkoutStatus.planned))
+    db.add(Workout(user_id=user.id, goal_id=None, date=_d(2026, 12, 3), type=WorkoutType.easy_run, status=WorkoutStatus.planned))
     db.add(Workout(user_id=user.id, goal_id=g1.id, date=_d(2026, 11, 1), type=WorkoutType.easy_run, status=WorkoutStatus.completed))
     db.commit()
-    n = _purge_planned_before_generate(user, g1, db, extra_goals=[g2])
-    assert n == 2
+    n = _purge_all_planned(user, db)
+    assert n == 3
     restantes = db.query(Workout).filter(Workout.user_id == user.id).all()
     assert len(restantes) == 1 and restantes[0].status == WorkoutStatus.completed
+
+
+class _FakeAIStream:
+    """Imita client.messages.stream(...) para un texto fijo."""
+    def __init__(self, text):
+        self._text = text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    @property
+    def text_stream(self):
+        yield self._text
+
+    def get_final_message(self):
+        class _M:
+            stop_reason = "end_turn"
+        return _M()
+
+
+def _plan_json(week_workouts: dict[int, list[dict]]) -> str:
+    weekly = [
+        {"week": wk, "focus": "x", "workouts": ws} for wk, ws in week_workouts.items()
+    ]
+    return "```json\n" + __import__("json").dumps({
+        "plan_name": "p", "weeks": len(weekly), "phases": [], "weekly_plan": weekly,
+    }) + "\n```"
+
+
+def test_generate_combinado_un_bloque_por_carrera(db, user, monkeypatch):
+    """El combinado hace UNA llamada IA por carrera: el bloque Hyrox con el
+    prompt Hyrox (SkiErg...), el de carrera a pie sin él; fechas y week_index
+    del bloque 2 continúan tras la carrera 1; purga total previa."""
+    from datetime import date as _d
+    from app.models.workout import Workout, WorkoutType, WorkoutStatus
+
+    monkeypatch.setattr(plan_generator, "today_madrid", lambda: _d(2026, 11, 16))
+
+    hyrox = Goal(user_id=user.id, type=GoalType.hyrox, description="Hyrox Bilbao",
+                 hyrox_division="dobles mixto", target_race_date=_d(2027, 2, 7), is_active=True)
+    media = Goal(user_id=user.id, type=GoalType.race, description="Media SS",
+                 target_race_date=_d(2027, 4, 4), is_active=True)
+    viejo = Goal(user_id=user.id, type=GoalType.race, description="Prueba vieja", is_active=False)
+    db.add_all([hyrox, media, viejo]); db.commit()
+    # Restos de la "prueba anterior": deben desaparecer al regenerar
+    db.add(Workout(user_id=user.id, goal_id=viejo.id, date=_d(2026, 11, 18), type=WorkoutType.tempo, status=WorkoutStatus.planned))
+    db.add(Workout(user_id=user.id, goal_id=hyrox.id, date=_d(2026, 11, 10), type=WorkoutType.hyrox_stations, status=WorkoutStatus.completed))
+    db.commit()
+
+    calls: list[dict] = []
+    respuestas = [
+        _plan_json({1: [{"type": "hyrox_stations", "day_of_week": 0, "duration_min": 60}],
+                    2: [{"type": "easy_run", "day_of_week": 2, "distance_km": 8}]}),
+        _plan_json({1: [{"type": "recovery", "day_of_week": 0, "duration_min": 30}],
+                    2: [{"type": "long_run", "day_of_week": 6, "distance_km": 16}]}),
+    ]
+
+    class _FakeMessages:
+        def stream(self, **kwargs):
+            calls.append(kwargs)
+            return _FakeAIStream(respuestas[len(calls) - 1])
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    monkeypatch.setattr(plan_generator.ai_client, "get_client", lambda: _FakeClient())
+
+    events = list(plan_generator.generate_plan_stream(user, hyrox, db, extra_goals=[media]))
+    done = next(e for e in events if e.get("phase") == "done")
+
+    # Una llamada por carrera, cada una con SU prompt
+    assert len(calls) == 2
+    assert "SkiErg" in calls[0]["system"]
+    assert "SkiErg" not in calls[1]["system"]
+    assert "BLOQUE 1" in calls[0]["messages"][0]["content"]
+    assert "BLOQUE 2" in calls[1]["messages"][0]["content"]
+    # El bloque 2 arranca en transición tras la carrera 1
+    assert "transici" in calls[1]["messages"][0]["content"].lower()
+
+    ws = db.query(Workout).filter(Workout.user_id == user.id, Workout.status == WorkoutStatus.planned).order_by(Workout.date).all()
+    assert [(w.type, str(w.date), w.week_index, w.goal_id) for w in ws] == [
+        (WorkoutType.hyrox_stations, "2026-11-16", 1, hyrox.id),
+        (WorkoutType.easy_run, "2026-11-25", 2, hyrox.id),
+        (WorkoutType.recovery, "2027-02-08", 13, media.id),
+        (WorkoutType.long_run, "2027-02-21", 14, media.id),
+    ]
+    # La prueba vieja se purgó; lo completado se conserva
+    assert db.query(Workout).filter(Workout.goal_id == viejo.id).count() == 0
+    assert db.query(Workout).filter(Workout.status == WorkoutStatus.completed).count() == 1
+    assert done["workouts_created"] == 4
+    assert done["weeks"] == 20

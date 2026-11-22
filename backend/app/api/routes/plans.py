@@ -100,13 +100,23 @@ def generate_stream(user_id: int, goal_id: int, current: User = Depends(get_curr
 def list_plan_workouts(
     user_id: int,
     goal_id: Optional[int] = Query(default=None),
+    goal_ids: Optional[str] = Query(default=None),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Lista los workouts del plan (opcionalmente filtrados por objetivo)."""
+    """Lista los workouts del plan (opcionalmente filtrados por objetivo(s))."""
     authorize_user(user_id, current)
     q = db.query(Workout).filter(Workout.user_id == user_id)
-    if goal_id is not None:
+    if isinstance(goal_ids, str) and goal_ids.strip():
+        # Vista COMBINADA: solo los objetivos del combo. Sin este filtro se
+        # devolvía TODO el histórico (Strava, objetivos viejos) y el plan
+        # combinado aparecía enterrado bajo meses de "semanas viejas".
+        try:
+            ids = [int(x) for x in goal_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="goal_ids debe ser una lista de enteros separados por comas")
+        q = q.filter(Workout.goal_id.in_(ids))
+    elif goal_id is not None:
         # Filtro ESTRICTO: los workouts sin objetivo son restos de planes/objetivos
         # antiguos (o anteriores a la columna goal_id) y colarlos aquí hacía que
         # las semanas de un plan borrado reaparecieran bajo cualquier objetivo
