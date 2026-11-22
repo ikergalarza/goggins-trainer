@@ -17,7 +17,7 @@ from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
-from app.services import ai_client, hyrox_knowledge, record_labels, wod_structure
+from app.services import ai_client, hyrox_knowledge, record_labels, wod_duration, wod_structure
 from app.services.clock import today_madrid
 from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
@@ -561,7 +561,7 @@ def _insert_plan_workouts(db: Session, user: User, data: dict[str, Any], start_m
                 type_str = "easy_run"
             dow = int(w.get("day_of_week", 0)) % 7
             workout_date = start_monday + timedelta(weeks=week_idx - 1, days=dow)
-            db.add(Workout(
+            workout = Workout(
                 user_id=user.id,
                 goal_id=goal_id,
                 date=workout_date,
@@ -575,7 +575,11 @@ def _insert_plan_workouts(db: Session, user: User, data: dict[str, Any], start_m
                 instructions=w.get("instructions"),
                 structure=wod_structure.sanitize(w.get("structure")),
                 modified_by="ai",
-            ))
+            )
+            # Con WOD estructurado la duración se CALCULA de su contenido (la que
+            # escribe la IA a ojo tendía a inflarse); sin WOD se queda la de la IA.
+            wod_duration.apply_to_workout(workout)
+            db.add(workout)
             created += 1
     return created
 

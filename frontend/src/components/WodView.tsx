@@ -28,12 +28,30 @@ export interface WodBlock {
   interval_s?: number
   items: WodItem[]
 }
+// Reparto del tiempo calculado por el backend (wod_duration.estimate).
+export interface WodEstimate {
+  warmup_min: number
+  work_min: number
+  cooldown_min: number
+  total_min: number
+}
 export interface WodStructure {
   objective?: string
   warmup?: { duration_min?: number; steps?: (string | WodItem)[] }
   blocks?: WodBlock[]
   cooldown?: string[]
   notes?: string
+  estimate?: WodEstimate
+}
+
+// Las tres partes de la sesión; las que valen 0 (sin calentamiento/vuelta a la
+// calma en el WOD) no se pintan.
+function timeParts(e: WodEstimate): { label: string; min: number }[] {
+  return [
+    { label: 'Calentamiento', min: e.warmup_min },
+    { label: 'WOD', min: e.work_min },
+    { label: 'Vuelta a la calma', min: e.cooldown_min },
+  ].filter((p) => p.min > 0)
 }
 
 function fmtSecs(s: number): string {
@@ -74,6 +92,22 @@ export default function WodView({ structure }: { structure: WodStructure }) {
   const [sheet, setSheet] = useState<{ slug: string; name?: string | null } | null>(null)
   return (
     <div className="space-y-4">
+      {structure.estimate && (
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-wider text-gray-500 mb-1">
+            ⏱ Reparto del tiempo · estimado
+          </p>
+          <div className="flex gap-2 text-center">
+            {timeParts(structure.estimate).map((p) => (
+              <div key={p.label} className="flex-1 min-w-0 bg-black/30 rounded-lg px-2 py-2.5">
+                <p className="text-xl font-black leading-none tabular-nums text-red-400">{p.min}'</p>
+                <p className="text-[11px] leading-tight text-gray-500 mt-1.5">{p.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {structure.objective && (
         <div className="bg-red-900/20 border border-red-900/40 rounded-lg p-3">
           <p className="text-[10px] font-black uppercase tracking-wider text-red-400 mb-0.5">🎯 Objetivo de hoy</p>

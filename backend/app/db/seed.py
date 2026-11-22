@@ -58,3 +58,21 @@ def seed_master() -> None:
         db.rollback()
     finally:
         db.close()
+
+
+def backfill_wod_durations() -> None:
+    """Corrige al arrancar los planes YA generados: la duración de los WODs
+    planificados pasa a calcularse de su contenido (la que escribía la IA a ojo
+    solía inflarse). Idempotente y nunca impide arrancar."""
+    from app.services import wod_duration
+
+    db: Session = SessionLocal()
+    try:
+        n = wod_duration.backfill(db)
+        if n:
+            logger.info(f"[backfill] Duración recalculada en {n} WOD(s) planificados")
+    except Exception as e:
+        logger.warning(f"[backfill] No se pudo recalcular la duración de los WODs: {e}")
+        db.rollback()
+    finally:
+        db.close()

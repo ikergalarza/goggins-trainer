@@ -15,7 +15,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.services import wod_structure
+from app.services import wod_duration, wod_structure
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.strava_activity import StravaActivity
 from app.models.goal import Goal
@@ -423,6 +423,10 @@ def _tool_update_workout(input: dict, user: User, db: Session) -> dict:
     if "structure" in input and input["structure"] is not None:
         w.structure = wod_structure.sanitize(input["structure"])
         changes["structure"] = "actualizado" if w.structure else "vacío/inválido"
+        # La duración sale del WOD nuevo; un `duration_min` suelto (sin tocar el
+        # WOD) sí se respeta: es el atleta pidiendo otra duración expresamente.
+        if wod_duration.apply_to_workout(w):
+            changes["duration_min"] = w.planned_duration_min
 
     w.modified_by = "user"
     db.add(w)
@@ -476,6 +480,7 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         structure=wod_structure.sanitize(input.get("structure")),
         modified_by="user",
     )
+    wod_duration.apply_to_workout(w)
     db.add(w)
     db.commit()
     db.refresh(w)

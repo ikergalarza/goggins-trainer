@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from app.services import wod_duration
+
 # Ejercicios canónicos que la UI sabe pintar (pictograma + nombre es-ES).
 # "other" exige `name`. Mantener en sintonía con frontend/src/components/exercises/catalog.ts
 EXERCISES = {
@@ -52,7 +54,9 @@ REGLAS del structure:
 - OBLIGATORIO: todo bloque "rounds", "sets" o "circuit" lleva `rounds`. Un bloque de fuerza de 4 series de 6 peso muerto se escribe: format "sets", rounds 4, item {"exercise": "deadlift", "reps": 6, "weight_kg": ...}. NUNCA un bloque de fuerza con una sola pasada implícita: si de verdad es 1 serie, pon rounds 1 explícito.
 - El calentamiento es ESPECÍFICO del trabajo del día (movilidad de lo que se usa + activación + aproximación progresiva), nunca "10 min genérico". Cada paso del calentamiento (y de los bloques de movilidad) que sea un ejercicio identificable va como objeto {exercise, reps|duration_s|distance_m, notes} usando los slugs de la lista — la app muestra su ficha con dibujo y vídeo. Texto libre solo para indicaciones que no son un ejercicio ("sube pulsaciones andando rápido").
 - Slugs de movilidad disponibles: ninety_ninety (90-90 de cadera), cat_camel (gato-camello), glute_bridge (puente de glúteo), hip_flexor_stretch (flexor de cadera en zancada), thoracic_opener (apertura torácica), dead_bug (bicho muerto), bird_dog (perro-pájaro), cossack_squat (sentadilla cosaca), leg_swing (balanceo de pierna), inchworm (oruga), worlds_greatest (el mejor estiramiento del mundo), ankle_rock (movilidad de tobillo contra pared), lunge (zancada), jumping_jack.
-- `objective` NUNCA vacío."""
+- `objective` NUNCA vacío.
+
+""" + wod_duration.PROMPT_REFERENCE
 
 _ITEM_KEYS = {"exercise", "name", "reps", "distance_m", "duration_s", "weight_kg", "pace", "target_m", "notes"}
 _INT_KEYS = {"reps", "distance_m", "duration_s"}
