@@ -180,6 +180,11 @@ export default function ChatPanel({ variant = 'page' }: ChatPanelProps) {
           if (payload.phase === 'chunk') {
             accumulated += payload.text || ''
             setStreamText(accumulated)
+          } else if (payload.phase === 'retract') {
+            // El servidor detectó que Goggins afirmaba un cambio sin ejecutarlo:
+            // se borra ese texto y se vuelve a pedir (la respuesta buena llega después).
+            accumulated = ''
+            setStreamText('')
           } else if (payload.phase === 'tool_use') {
             tools = [...tools, { name: payload.name, input: payload.input, state: 'running' }]
             setStreamTools(tools)

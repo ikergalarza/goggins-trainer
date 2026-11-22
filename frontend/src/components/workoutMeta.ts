@@ -2,7 +2,7 @@
 // El backend NO almacena `discipline` (solo `type`), así que la derivamos aquí
 // a partir del `type` para colorear y agrupar de forma consistente.
 
-export type Discipline = 'swim' | 'bike' | 'run' | 'brick' | 'hyrox' | 'strength' | 'mobility' | 'rest'
+export type Discipline = 'swim' | 'bike' | 'run' | 'brick' | 'hyrox' | 'strength' | 'mobility' | 'rest' | 'race'
 
 // Etiquetas legibles por tipo de entreno (es-ES).
 export const TYPE_LABELS: Record<string, string> = {
@@ -31,6 +31,7 @@ export const TYPE_LABELS: Record<string, string> = {
   transition: 'Transiciones',
   // Otros
   rest: 'Descanso',
+  race: 'Día de carrera',
 }
 
 // Mapa type -> disciplina, para colorear por deporte (no por intensidad).
@@ -64,6 +65,8 @@ const TYPE_TO_DISCIPLINE: Record<string, Discipline> = {
   mobility: 'mobility',
   // Descanso
   rest: 'rest',
+  // Día de la carrera (competición)
+  race: 'race',
 }
 
 export function disciplineOf(type: string): Discipline {
@@ -80,6 +83,7 @@ export const DISCIPLINE_ICONS: Record<Discipline, string> = {
   strength: '🏋️',
   mobility: '🧘',
   rest: '😴',
+  race: '🏁',
 }
 
 export const DISCIPLINE_LABELS: Record<Discipline, string> = {
@@ -91,6 +95,7 @@ export const DISCIPLINE_LABELS: Record<Discipline, string> = {
   strength: 'Fuerza',
   mobility: 'Movilidad',
   rest: 'Descanso',
+  race: 'Competición',
 }
 
 // Paleta por disciplina. Mantiene el tema oscuro existente (variantes 900/40)
@@ -165,6 +170,14 @@ export const DISCIPLINE_THEME: Record<Discipline, DisciplineTheme> = {
     accentText: 'text-gray-400',
     dot: 'bg-gray-600',
     chipBg: 'bg-gray-700/30 text-gray-400',
+  },
+  // El día de la prueba: dorado, para que destaque entre los entrenos.
+  race: {
+    card: 'bg-yellow-950/60 border-yellow-500/70 text-yellow-100',
+    accentBorder: 'border-l-yellow-400',
+    accentText: 'text-yellow-300',
+    dot: 'bg-yellow-400',
+    chipBg: 'bg-yellow-500/20 text-yellow-200',
   },
 }
 

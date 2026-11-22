@@ -3,6 +3,9 @@ import {
   parseIntervals,
   formatIntervalSet,
   disciplineOf,
+  themeOf,
+  TYPE_LABELS,
+  DISCIPLINE_ICONS,
 } from './workoutMeta'
 
 describe('parseIntervals', () => {
@@ -94,5 +97,15 @@ describe('paceOrSpeed', () => {
     expect(paceOrSpeed('easy_run', null, 50)).toBeNull()
     expect(paceOrSpeed('mobility', 5, 30)).toBeNull()
     expect(paceOrSpeed('rest', 0, 0)).toBeNull()
+  })
+})
+
+
+describe('día de carrera', () => {
+  it('es su propia disciplina, con icono, etiqueta y tema propios (no se confunde con correr)', () => {
+    expect(disciplineOf('race')).toBe('race')
+    expect(DISCIPLINE_ICONS.race).toBe('🏁')
+    expect(TYPE_LABELS.race).toBe('Día de carrera')
+    expect(themeOf('race')).not.toBe(themeOf('easy_run'))
   })
 })

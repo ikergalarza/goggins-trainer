@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import api, { API_BASE, authHeaders } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import WorkoutCard from '../components/WorkoutCard'
@@ -16,9 +16,10 @@ import {
   type Discipline,
 } from '../components/workoutMeta'
 import { parseLocalDate, formatDayKey, startOfWeek } from '../lib/date'
+import { COMBINED, generateLabel, modeFor, planOptions, type PlanInfo } from '../lib/planMode'
 
 // Disciplinas mostradas en la leyenda (orden lógico de un triatlón + fuerza/descanso).
-const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'hyrox', 'strength', 'mobility', 'rest']
+const LEGEND_DISCIPLINES: Discipline[] = ['swim', 'bike', 'run', 'brick', 'hyrox', 'strength', 'mobility', 'rest', 'race']
 
 interface Goal {
   id: number
@@ -69,8 +70,15 @@ const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 
 export default function Plan() {
   const { effectiveUserId } = useAuth()
+  // Objetivos activos del atleta: alimentan las opciones al elegir qué plan generar.
   const [goals, setGoals] = useState<Goal[]>([])
-  const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null)
+  // Qué plan se va a (re)generar: COMBINED (-1) o el id de un objetivo. El plan que
+  // está EN VIGOR lo dice el backend (`plan`); esto es solo la elección del atleta.
+  const [mode, setMode] = useState<number | null>(null)
+  const [plan, setPlan] = useState<PlanInfo | null>(null)
+  const [planLoaded, setPlanLoaded] = useState(false)
+  // La elección inicial se hace una sola vez: recargar el plan no debe pisar lo que eligió.
+  const modeChosen = useRef(false)
   const [workouts, setWorkouts] = useState<Workout[]>([])
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -94,11 +102,10 @@ export default function Plan() {
   // Carga inicial (y al cambiar de usuario "ver como")
   useEffect(() => {
     if (effectiveUserId == null) return
+    modeChosen.current = false
+    setPlanLoaded(false)
     api.get(`/api/goals/${effectiveUserId}?active_only=true`)
-      .then(r => {
-        setGoals(r.data)
-        if (r.data.length > 0) setSelectedGoalId(r.data[0].id)
-      })
+      .then(r => setGoals(r.data))
       .catch(() => {})
   }, [effectiveUserId])
 
@@ -110,35 +117,42 @@ export default function Plan() {
       .catch(() => setUnlinked([]))
   }
 
-  // selectedGoalId === -1 → modo COMBINADO: las carreras con fecha, en un solo calendario.
-  const fetchWorkouts = (goalId: number | null) => {
+  // UN solo plan en vigor (combinado o individual): el backend dice cuál es y
+  // devuelve sus entrenos. Sin pestañas por objetivo que lo partan en trozos,
+  // ni el histórico de planes viejos colándose como "semanas previas".
+  const fetchPlan = () => {
     if (effectiveUserId == null) return
     setLoading(true)
-    // En combinado se filtra a los objetivos del combo: sin filtro venía TODO
-    // el histórico (Strava, objetivos viejos) y el plan quedaba enterrado
-    // bajo meses de semanas pasadas con la numeración desplazada.
-    const comboIds = goals.filter(g => g.target_race_date).map(g => g.id).join(',')
-    const url = goalId && goalId > 0
-      ? `/api/plans/${effectiveUserId}?goal_id=${goalId}`
-      : `/api/plans/${effectiveUserId}${comboIds ? `?goal_ids=${comboIds}` : ''}`
-    api.get(url)
-      .then(r => setWorkouts(r.data))
-      .catch(() => setWorkouts([]))
-      .finally(() => setLoading(false))
+    api.get(`/api/plans/${effectiveUserId}/current`)
+      .then(r => {
+        setWorkouts(r.data.workouts)
+        setPlan({ kind: r.data.kind, goals: r.data.goals })
+      })
+      .catch(() => {
+        setWorkouts([])
+        setPlan({ kind: 'none', goals: [] })
+      })
+      .finally(() => {
+        setLoading(false)
+        setPlanLoaded(true)
+      })
     fetchUnlinked()
   }
 
+  useEffect(() => { fetchPlan() }, [effectiveUserId])
+
+  // Preselecciona el plan en vigor (o el combinado si aún no hay plan y hay 2+ carreras).
   useEffect(() => {
-    if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
-  }, [selectedGoalId, goals])
+    if (modeChosen.current || !planLoaded || goals.length === 0) return
+    setMode(modeFor(plan, goals))
+    modeChosen.current = true
+  }, [plan, planLoaded, goals])
 
   // Escucha mutaciones del plan desde otras páginas (p.ej. chat Goggins) y
   // recarga también al volver el foco/visibilidad a la pestaña, por si la
   // mutación ocurrió mientras el Plan no estaba montado o en otra pestaña.
   useEffect(() => {
-    const reload = () => {
-      if (selectedGoalId !== null) fetchWorkouts(selectedGoalId)
-    }
+    const reload = () => fetchPlan()
     const onVisibility = () => {
       if (document.visibilityState === 'visible') reload()
     }
@@ -150,11 +164,15 @@ export default function Plan() {
       window.removeEventListener('focus', reload)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [selectedGoalId, goals])
+  }, [effectiveUserId])
 
   const handleGenerate = async () => {
-    if (!selectedGoalId || effectiveUserId == null) return
-    const combinado = selectedGoalId === -1
+    if (mode == null || effectiveUserId == null) return
+    const combinado = mode === COMBINED
+    // Cambiar de tipo de plan (p. ej. de combinado a uno solo) sustituye el plan entero.
+    if (plan && plan.kind !== 'none' && !options.find(o => o.id === mode)?.inForce && options.length > 0) {
+      if (!confirm('Esto sustituye tu plan actual por el que has elegido. Lo que ya has entrenado se conserva. ¿Seguimos?')) return
+    }
     setGenerating(true)
     setProgress(0)
     setProgressMsg('Iniciando...')
@@ -163,7 +181,7 @@ export default function Plan() {
 
     const url = combinado
       ? `${API_BASE}/api/plans/generate_stream_combined/${effectiveUserId}`
-      : `${API_BASE}/api/plans/generate_stream/${effectiveUserId}/${selectedGoalId}`
+      : `${API_BASE}/api/plans/generate_stream/${effectiveUserId}/${mode}`
 
     try {
       let res: Response
@@ -230,7 +248,7 @@ export default function Plan() {
             setProgress(100)
             setProgressMsg(`✓ Plan creado: ${payload.workouts_created} entrenos`)
             setMsg({ text: `Plan creado: ${payload.workouts_created} entrenos`, ok: true })
-            fetchWorkouts(selectedGoalId)
+            fetchPlan()
           } else if (payload.phase === 'error') {
             throw new Error(payload.detail || 'Error desconocido')
           }
@@ -254,7 +272,7 @@ export default function Plan() {
     try {
       const r = await api.post(`/api/plans/match_strava/${effectiveUserId}`)
       setMsg({ text: `${r.data.matched} entrenos emparejados con Strava`, ok: true })
-      if (selectedGoalId) fetchWorkouts(selectedGoalId)
+      fetchPlan()
     } catch (e: any) {
       setMsg({ text: `Error: ${e?.response?.data?.detail || e?.message}`, ok: false })
     }
@@ -348,7 +366,7 @@ export default function Plan() {
   // strings es cronológicamente correcto (orden lexicográfico = orden de fechas).
   const currentWeekKey = formatDayKey(startOfWeek(new Date()))
 
-  const selectedGoal = goals.find(g => g.id === selectedGoalId) || null
+  const options = planOptions(goals, plan)
 
   return (
     <div className="space-y-6">
@@ -357,21 +375,108 @@ export default function Plan() {
           <h1 className="text-2xl sm:text-3xl font-black tracking-tight">🗓️ Plan de Entrenamiento</h1>
           <p className="text-gray-500 text-sm mt-1">Periodización generada por IA basada en tu objetivo.</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={handleMatch}
-            className="bg-gray-800 hover:bg-gray-700 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-bold"
-          >
-            🔗 Emparejar Strava
-          </button>
-          <button
-            onClick={handleGenerate}
-            disabled={generating || !selectedGoalId}
-            className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-3 sm:px-4 py-2 rounded-lg text-sm font-bold"
-          >
-            {generating ? '⏳ Generando...' : workouts.length > 0 ? '🔄 Regenerar plan' : '⚡ Generar plan'}
-          </button>
-        </div>
+        <button
+          onClick={handleMatch}
+          className="min-h-11 w-fit bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-white px-4 rounded-lg text-sm font-bold"
+        >
+          🔗 Emparejar Strava
+        </button>
+      </div>
+
+      {/* Tu plan: UNO solo en vigor (combinado o individual) y qué plan generar */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-4">
+        {goals.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            No tienes objetivos activos. Crea uno en la sección{' '}
+            <a href="/goals" className="text-red-400 hover:underline">Objetivos</a>.
+          </p>
+        ) : (
+          <>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-gray-500 mb-1">Tu plan</p>
+              {plan && plan.kind !== 'none' ? (
+                <>
+                  <p className="text-base font-bold text-gray-100">
+                    {plan.kind === 'combined' ? '🔀 Plan combinado' : '🎯 Plan individual'}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {plan.goals.map(g => (
+                      <li key={g.id} className="text-sm text-gray-400">
+                        🏁 {g.description}
+                        {g.target_race_date && (
+                          <span className="text-gray-500">
+                            {' · '}
+                            {parseLocalDate(g.target_race_date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="text-sm text-gray-400">{planLoaded ? 'Aún no tienes plan.' : 'Cargando...'}</p>
+              )}
+            </div>
+
+            {options.length > 0 && (
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-gray-500 mb-1.5">¿Qué plan quieres?</p>
+                <div role="radiogroup" aria-label="Plan a generar" className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+                  {options.map(o => {
+                    const selected = mode === o.id
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        disabled={generating}
+                        onClick={() => setMode(o.id)}
+                        className={`min-h-11 w-full sm:w-auto px-3 py-2 rounded-lg border text-sm font-bold text-left flex items-center gap-3 transition-colors disabled:opacity-50 ${
+                          selected
+                            ? 'border-red-500 bg-red-950/40 text-white'
+                            : 'border-gray-800 bg-gray-800/60 text-gray-300 hover:bg-gray-800 active:bg-gray-700'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                            selected ? 'border-red-400' : 'border-gray-600'
+                          }`}
+                        >
+                          {selected && <span className="w-2 h-2 rounded-full bg-red-400" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          {o.id === COMBINED ? '🔀 ' : ''}
+                          {o.label}
+                        </span>
+                        <span className="shrink-0 flex items-center gap-2 text-xs font-semibold opacity-80">
+                          {o.sub}
+                          {o.inForce && (
+                            <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-black/30">en vigor</span>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+              <button
+                onClick={handleGenerate}
+                disabled={generating || mode == null}
+                className="min-h-11 w-full sm:w-auto bg-red-600 hover:bg-red-700 active:bg-red-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-bold"
+              >
+                {generating ? '⏳ Generando...' : generateLabel(mode, options, plan)}
+              </button>
+              <p className="text-xs text-gray-500">
+                Sustituye lo que tienes por hacer; lo que ya has entrenado se conserva.
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       {msg && !generating && (
@@ -412,56 +517,10 @@ export default function Plan() {
         </div>
       )}
 
-      {/* Selector de objetivo */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        {goals.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            No tienes objetivos activos. Crea uno en la sección{' '}
-            <a href="/goals" className="text-red-400 hover:underline">Objetivos</a>.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {/* Plan combinado: una sola periodización para todas las carreras con fecha */}
-            {goals.filter(g => g.target_race_date).length >= 2 && (
-              <button
-                onClick={() => setSelectedGoalId(-1)}
-                className={`min-h-11 px-4 rounded-lg text-sm font-bold transition-colors ${
-                  selectedGoalId === -1
-                    ? 'bg-red-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 active:bg-gray-600'
-                }`}
-                title="Un único plan que encadena todas tus carreras en orden"
-              >
-                🔀 Combinado
-                <span className="ml-2 text-xs opacity-70">{goals.filter(g => g.target_race_date).length} carreras</span>
-              </button>
-            )}
-            {goals.map(g => (
-              <button
-                key={g.id}
-                onClick={() => setSelectedGoalId(g.id)}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${
-                  selectedGoalId === g.id
-                    ? 'bg-red-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                {g.description}
-                {g.target_race_date && (
-                  <span className="ml-2 text-xs opacity-70">
-                    {new Date(g.target_race_date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {selectedGoal && workouts.length === 0 && !loading && (
+      {goals.length > 0 && plan?.kind === 'none' && !loading && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-          <p className="text-gray-400 mb-2">Aún no hay plan para este objetivo.</p>
-          <p className="text-xs text-gray-600">Pulsa "Generar plan" para que la IA cree uno periodizado.</p>
+          <p className="text-gray-400 mb-2">Aún no hay plan.</p>
+          <p className="text-xs text-gray-600">Elige qué plan quieres y pulsa «Generar plan» para que la IA cree uno periodizado.</p>
         </div>
       )}
 
@@ -698,6 +757,11 @@ export default function Plan() {
                         {STATUS_LABELS[selectedWorkout.status] || selectedWorkout.status}
                       </span>
                     </div>
+                    {selectedWorkout.type === 'race' && (
+                      <p className="text-sm font-bold text-yellow-300 mt-1.5">
+                        {plan?.goals.find(g => g.id === selectedWorkout.goal_id)?.description}
+                      </p>
+                    )}
                     <p className="text-xs text-gray-500 mt-1.5 capitalize">
                       {parseLocalDate(selectedWorkout.date).toLocaleDateString('es-ES', {
                         weekday: 'long',
