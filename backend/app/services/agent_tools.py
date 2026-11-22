@@ -7,6 +7,7 @@ Cada tool tiene:
 El executor SIEMPRE valida que el workout pertenece al usuario activo
 antes de modificarlo. Devuelve dicts serializables.
 """
+import copy
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -15,7 +16,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.services import wod_duration, wod_structure
+from app.services import current_plan as plan_svc, wod_duration, wod_structure
+from app.services.clock import today_madrid, weekday_es
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.strava_activity import StravaActivity
 from app.models.goal import Goal
@@ -26,19 +28,55 @@ logger = logging.getLogger(__name__)
 VALID_TYPES = [t.value for t in WorkoutType]
 
 
-def _active_goal_id(user: User, db: Session):
-    """Objetivo activo más reciente del usuario (para asociar workouts nuevos).
+def _goal_id_for_date(user: User, db: Session, d: date, explicit: Any = None) -> int | None:
+    """Objetivo al que pertenece un workout de la fecha `d`.
 
-    Si los workouts que añade Goggins no llevan goal_id, no aparecen en la vista
-    de Plan (que filtra por objetivo). Por eso se asocian al objetivo activo.
+    Antes se asociaba al "último objetivo creado": en un plan combinado eso lo
+    dejaba en el objetivo equivocado (y fuera de la vista de su bloque). Ahora
+    manda la fecha: el objetivo del plan en vigor cuya carrera aún no ha pasado
+    en `d` (o el último si `d` es posterior a todas). Un `goal_id` del modelo
+    solo se respeta si es de este usuario.
     """
-    g = (
-        db.query(Goal)
-        .filter(Goal.user_id == user.id, Goal.is_active.is_(True))
-        .order_by(Goal.created_at.desc())
-        .first()
-    )
-    return g.id if g else None
+    if explicit:
+        try:
+            own = db.query(Goal.id).filter(Goal.id == int(explicit), Goal.user_id == user.id).first()
+        except (TypeError, ValueError):
+            own = None
+        if own:
+            return own[0]
+    goals = plan_svc.plan_goals(user.id, db, today_madrid())
+    if not goals:
+        goals = (
+            db.query(Goal).filter(Goal.user_id == user.id, Goal.is_active.is_(True)).all()
+        )
+        goals.sort(key=lambda g: (g.target_race_date is None, g.target_race_date or date.max, g.id))
+    dated = [g for g in goals if g.target_race_date]
+    for g in dated:
+        if g.target_race_date >= d:
+            return g.id
+    if dated:
+        return dated[-1].id
+    return max(goals, key=lambda g: g.id).id if goals else None
+
+
+# Fechas razonables para tocar el plan: hasta 2 semanas atrás (apuntar lo de
+# ayer) y hasta 2 años adelante. Lo demás casi seguro es un día/año mal resuelto.
+_PAST_TOLERANCE_DAYS = 14
+_FUTURE_LIMIT_DAYS = 730
+
+
+def _check_date(d: date) -> str | None:
+    """None si la fecha es razonable; si no, el error que ve el modelo para corregirla."""
+    today = today_madrid()
+    delta = (d - today).days
+    if delta < -_PAST_TOLERANCE_DAYS or delta > _FUTURE_LIMIT_DAYS:
+        return (
+            f"La fecha {d.isoformat()} ({weekday_es(d)}) queda muy lejos de hoy ({weekday_es(today)} {today.isoformat()}). "
+            "Búscala en `calendar` del contexto y repite con la fecha correcta."
+        )
+    return None
+
+
 VALID_STATUSES = [s.value for s in WorkoutStatus]
 
 
@@ -181,9 +219,64 @@ TOOLS: list[dict[str, Any]] = [
                 "duration_min": {"type": "integer"},
                 "hr_zone": {"type": "string"},
                 "instructions": {"type": "string"},
-                "goal_id": {"type": "integer"},
+                "structure": {
+                    "type": "object",
+                    "description": "WOD estructurado (mismo formato que en add_workout); se aplica a todas las fechas. OBLIGATORIO en Hyrox/fuerza.",
+                },
+                "goal_id": {"type": "integer", "description": "Opcional: normalmente se deduce de cada fecha."},
             },
             "required": ["type", "start_date", "end_date"],
+        },
+    },
+    {
+        "name": "add_weekly_session",
+        "description": (
+            "Añade UNA sesión más por semana durante todo el plan (o el tramo indicado): "
+            "'un día más de entreno a la semana', 'una sesión de X cada semana'. Si no pasas "
+            "`weekday`, elige el día de la semana más libre. Se salta los días pasados y las "
+            "semanas de carrera, y asocia cada sesión al objetivo de su fecha. Para Hyrox/fuerza "
+            "pasa `structure` (el mismo WOD se repite cada semana). Sin end_date, llega hasta la "
+            "última carrera."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": VALID_TYPES},
+                "weekday": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 6,
+                    "description": "Día de la semana (0=lunes ... 6=domingo). Si se omite, se elige el más libre.",
+                },
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Por defecto mañana."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD (incluido). Por defecto, la última carrera."},
+                "distance_km": {"type": "number"},
+                "duration_min": {"type": "integer"},
+                "hr_zone": {"type": "string"},
+                "instructions": {"type": "string"},
+                "structure": {
+                    "type": "object",
+                    "description": "WOD estructurado (objetivo, warmup{duration_min,steps}, blocks[{title,format,rounds,rest_s,items[{exercise,reps,distance_m,duration_s,weight_kg,pace}]}], cooldown, notes). OBLIGATORIO en Hyrox/fuerza.",
+                },
+                "skip_race_week": {
+                    "type": "boolean",
+                    "description": "Por defecto true: no añade nada en la semana de cada carrera.",
+                },
+                "goal_id": {"type": "integer", "description": "Opcional: normalmente se deduce de la fecha. Solo un id de `active_goals`."},
+            },
+            "required": ["type"],
+        },
+    },
+    {
+        "name": "set_training_days_per_week",
+        "description": (
+            "Guarda cuántos días a la semana entrena el atleta (1-7) para que los planes futuros "
+            "lo respeten. Llámala cuando pida entrenar un día más o menos de forma permanente."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 7}},
+            "required": ["days"],
         },
     },
     {
@@ -354,7 +447,7 @@ def _parse_date(s: str) -> date:
 # ────────────────────────────────────────────────────────────────────
 
 def _tool_list_workouts(input: dict, user: User, db: Session) -> dict:
-    today = date.today()
+    today = today_madrid()
     start = _parse_date(input["start_date"]) if input.get("start_date") else today
     end = _parse_date(input["end_date"]) if input.get("end_date") else today + timedelta(days=14)
     workouts = (
@@ -379,6 +472,9 @@ def _tool_move_workout(input: dict, user: User, db: Session) -> dict:
     if not w:
         return {"ok": False, "error": "Workout no encontrado"}
     new_date = _parse_date(input["new_date"])
+    bad = _check_date(new_date)
+    if bad:
+        return {"ok": False, "error": bad}
     old_date = w.date.isoformat() if w.date else None
     w.date = new_date
     w.day_of_week = new_date.weekday()
@@ -465,10 +561,13 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         d = _parse_date(input["date"])
     except Exception as e:
         return {"ok": False, "error": f"Fecha inválida: {e}"}
+    bad = _check_date(d)
+    if bad:
+        return {"ok": False, "error": bad}
 
     w = Workout(
         user_id=user.id,
-        goal_id=input.get("goal_id") or _active_goal_id(user, db),
+        goal_id=_goal_id_for_date(user, db, d, input.get("goal_id")),
         date=d,
         day_of_week=d.weekday(),
         type=WorkoutType(type_str),
@@ -481,6 +580,10 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         modified_by="user",
     )
     wod_duration.apply_to_workout(w)
+    otros = [
+        {"id": o.id, "type": o.type.value if hasattr(o.type, "value") else o.type}
+        for o in db.query(Workout).filter(Workout.user_id == user.id, Workout.date == d).all()
+    ]
     db.add(w)
     db.commit()
     db.refresh(w)
@@ -489,7 +592,10 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         "mutation": "add_workout",
         "workout_id": w.id,
         "workout": _serialize_workout(w),
-        "summary": f"Añadido workout {type_str} el {d.isoformat()}",
+        "weekday": weekday_es(d),
+        "goal_id": w.goal_id,
+        "same_day_other_workouts": otros,
+        "summary": f"Añadido workout {type_str} el {weekday_es(d)} {d.isoformat()}",
     }
 
 
@@ -525,7 +631,7 @@ def _tool_shift_plan(input: dict, user: User, db: Session) -> dict:
     if delta_days == 0:
         return {"ok": False, "error": "El desplazamiento no puede ser 0"}
 
-    from_date = _parse_date(input["from_date"]) if input.get("from_date") else date.today()
+    from_date = _parse_date(input["from_date"]) if input.get("from_date") else today_madrid()
     workouts = (
         db.query(Workout)
         .filter(Workout.user_id == user.id, Workout.date >= from_date)
@@ -760,6 +866,148 @@ def _tool_compare_planned_vs_actual(input: dict, user: User, db: Session) -> dic
 _MAX_RECURRING = 200
 
 
+def _new_session(user: User, db: Session, d: date, wtype: WorkoutType, input: dict, structure: dict | None) -> Workout:
+    """Workout planificado de una sesión recurrente/semanal, con su objetivo y su duración calculada."""
+    w = Workout(
+        user_id=user.id,
+        goal_id=_goal_id_for_date(user, db, d, input.get("goal_id")),
+        date=d,
+        day_of_week=d.weekday(),
+        type=wtype,
+        status=WorkoutStatus.planned,
+        planned_distance_km=input.get("distance_km"),
+        planned_duration_min=input.get("duration_min"),
+        planned_heart_rate_zone=input.get("hr_zone"),
+        instructions=input.get("instructions"),
+        structure=copy.deepcopy(structure),
+        modified_by="user",
+    )
+    wod_duration.apply_to_workout(w)
+    return w
+
+
+# Orden de preferencia cuando varios días de la semana están igual de libres:
+# miércoles, viernes, sábado... (los extremos de la semana, al final).
+_WEEKDAY_PREFERENCE = [2, 4, 5, 1, 3, 6, 0]
+
+
+def _freest_weekday(existing: list[Workout]) -> int:
+    """Día de la semana con menos entrenos (y con vecinos menos cargados)."""
+    count = [0] * 7
+    for w in existing:
+        if w.type != WorkoutType.rest:
+            count[w.date.weekday()] += 1
+    return min(
+        _WEEKDAY_PREFERENCE,
+        key=lambda wd: (count[wd] * 10 + count[(wd - 1) % 7] + count[(wd + 1) % 7], _WEEKDAY_PREFERENCE.index(wd)),
+    )
+
+
+def _tool_add_weekly_session(input: dict, user: User, db: Session) -> dict:
+    type_str = input.get("type")
+    if type_str not in VALID_TYPES or type_str in ("race", "rest"):
+        return {"ok": False, "error": f"Tipo inválido para una sesión semanal: {type_str}"}
+    today = today_madrid()
+    goals = plan_svc.plan_goals(user.id, db, today) or (
+        db.query(Goal).filter(Goal.user_id == user.id, Goal.is_active.is_(True)).all()
+    )
+    races = sorted(g.target_race_date for g in goals if g.target_race_date and g.target_race_date >= today)
+
+    try:
+        start = _parse_date(input["start_date"]) if input.get("start_date") else today + timedelta(days=1)
+        end = _parse_date(input["end_date"]) if input.get("end_date") else (races[-1] if races else start + timedelta(weeks=12))
+    except Exception as e:
+        return {"ok": False, "error": f"Fecha inválida: {e}"}
+    bad = _check_date(start) or _check_date(end)
+    if bad:
+        return {"ok": False, "error": bad}
+    if end < start:
+        return {"ok": False, "error": "end_date debe ser >= start_date"}
+    start = max(start, today)                    # no se planifica en el pasado
+    if end < start:
+        return {"ok": False, "error": "Todo el rango queda en el pasado"}
+
+    existing = (
+        db.query(Workout)
+        .filter(Workout.user_id == user.id, Workout.date >= start, Workout.date <= end)
+        .all()
+    )
+    weekday = input.get("weekday")
+    if weekday is None:
+        weekday = _freest_weekday(existing)
+    else:
+        try:
+            weekday = int(weekday)
+        except (TypeError, ValueError):
+            weekday = -1
+        if not 0 <= weekday <= 6:
+            return {"ok": False, "error": "weekday debe ser 0 (lunes) .. 6 (domingo)"}
+
+    skip_race_week = input.get("skip_race_week", True) is not False
+    race_weeks = {r - timedelta(days=r.weekday()) for r in races}
+    wtype = WorkoutType(type_str)
+    structure = wod_structure.sanitize(input.get("structure"))
+    ya = {(w.date, w.type) for w in existing}
+    busy = {w.date for w in existing if w.type != WorkoutType.rest}
+
+    new_sessions: list[Workout] = []
+    skipped_races: set[date] = set()
+    skipped_existing = 0
+    d = start
+    while d <= end:
+        if d.weekday() == weekday:
+            monday = d - timedelta(days=d.weekday())
+            if skip_race_week and monday in race_weeks:
+                skipped_races.add(monday)
+            elif (d, wtype) in ya:
+                skipped_existing += 1
+            else:
+                new_sessions.append(_new_session(user, db, d, wtype, input, structure))
+                if len(new_sessions) > _MAX_RECURRING:
+                    return {"ok": False, "error": f"Demasiadas sesiones (>{_MAX_RECURRING}). Acota el rango."}
+        d += timedelta(days=1)
+
+    if not new_sessions:
+        why = "ya tienes esa sesión en todas esas semanas" if skipped_existing else "no hay semanas libres en ese rango"
+        return {"ok": False, "error": f"No se añadió nada: {why}."}
+    for w in new_sessions:
+        db.add(w)
+    db.commit()
+    name = weekday_es(date(2026, 1, 5) + timedelta(days=weekday))
+    first, last = new_sessions[0].date, new_sessions[-1].date
+    return {
+        "ok": True,
+        "mutation": "add_weekly_session",
+        "created": len(new_sessions),
+        "weekday": name,
+        "weekday_index": weekday,
+        "first_date": first.isoformat(),
+        "last_date": last.isoformat(),
+        "skipped_race_weeks": len(skipped_races),
+        "skipped_existing": skipped_existing,
+        "days_with_other_sessions": sum(1 for w in new_sessions if w.date in busy),
+        "summary": f"Añadidas {len(new_sessions)} sesiones '{type_str}' los {name} del {first.isoformat()} al {last.isoformat()}",
+    }
+
+
+def _tool_set_training_days_per_week(input: dict, user: User, db: Session) -> dict:
+    try:
+        days = int(input.get("days"))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "days debe ser un número entre 1 y 7"}
+    if not 1 <= days <= 7:
+        return {"ok": False, "error": "days debe estar entre 1 y 7"}
+    user.training_days_per_week = days
+    db.add(user)
+    db.commit()
+    return {
+        "ok": True,
+        "mutation": "set_training_days_per_week",
+        "days": days,
+        "summary": f"Días de entreno por semana: {days}",
+    }
+
+
 def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
     type_str = input.get("type", "mobility")
     if type_str not in VALID_TYPES:
@@ -771,6 +1019,12 @@ def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
         return {"ok": False, "error": f"Fecha inválida: {e}"}
     if end < start:
         return {"ok": False, "error": "end_date debe ser >= start_date"}
+    bad = _check_date(start) or _check_date(end)
+    if bad:
+        return {"ok": False, "error": bad}
+    start = max(start, today_madrid())          # no se planifica en el pasado
+    if end < start:
+        return {"ok": False, "error": "Todo el rango queda en el pasado"}
 
     dows = input.get("days_of_week")
     if dows is not None:
@@ -792,7 +1046,7 @@ def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
         return {"ok": False, "error": "Ninguna fecha coincide con los días indicados"}
 
     wtype = WorkoutType(type_str)
-    goal_id = input.get("goal_id") or _active_goal_id(user, db)
+    structure = wod_structure.sanitize(input.get("structure"))
     # No duplicar si ya hay un workout del mismo tipo ese día
     existing = {
         (w.date, w.type)
@@ -806,19 +1060,7 @@ def _tool_add_recurring_workout(input: dict, user: User, db: Session) -> dict:
     for d in target_dates:
         if (d, wtype) in existing:
             continue
-        db.add(Workout(
-            user_id=user.id,
-            goal_id=goal_id,
-            date=d,
-            day_of_week=d.weekday(),
-            type=wtype,
-            status=WorkoutStatus.planned,
-            planned_distance_km=input.get("distance_km"),
-            planned_duration_min=input.get("duration_min"),
-            planned_heart_rate_zone=input.get("hr_zone"),
-            instructions=input.get("instructions"),
-            modified_by="user",
-        ))
+        db.add(_new_session(user, db, d, wtype, input, structure))
         created += 1
     db.commit()
     return {
@@ -863,6 +1105,8 @@ _DISPATCH = {
     "delete_workout": _tool_delete_workout,
     "add_workout": _tool_add_workout,
     "add_recurring_workout": _tool_add_recurring_workout,
+    "add_weekly_session": _tool_add_weekly_session,
+    "set_training_days_per_week": _tool_set_training_days_per_week,
     "mark_workout_status": _tool_mark_workout_status,
     "shift_plan": _tool_shift_plan,
     "adjust_week_load": _tool_adjust_week_load,

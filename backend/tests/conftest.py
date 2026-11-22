@@ -186,3 +186,14 @@ def make_strava_activity(db):
         return a
 
     return _factory
+
+
+@pytest.fixture()
+def soon():
+    """Fecha ISO relativa a HOY (hora española): los tests de tools no deben caducar."""
+    from datetime import timedelta
+    from app.services.clock import today_madrid
+
+    def _soon(days: int = 3) -> str:
+        return (today_madrid() + timedelta(days=days)).isoformat()
+    return _soon

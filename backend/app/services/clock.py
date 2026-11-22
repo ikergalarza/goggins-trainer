@@ -13,8 +13,19 @@ TZ = ZoneInfo("Europe/Madrid")
 WEEKDAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 
 
+def now_madrid() -> datetime:
+    return datetime.now(TZ)
+
+
 def today_madrid() -> date:
-    return datetime.now(TZ).date()
+    return now_madrid().date()
+
+
+def to_madrid(dt: datetime) -> datetime:
+    """Pasa un datetime a hora española. Los naive (SQLite en tests) se toman como UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone(TZ)
 
 
 def weekday_es(d: date) -> str:

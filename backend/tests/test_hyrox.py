@@ -103,9 +103,9 @@ def test_sanitize_capa_tamaños():
 
 # --- tools del chat: structure + feedback ------------------------------------
 
-def test_add_workout_tool_persiste_structure(db, user):
+def test_add_workout_tool_persiste_structure(db, user, soon):
     out = agent_tools.execute_tool("add_workout", {
-        "date": "2026-09-17", "type": "hyrox_stations",
+        "date": soon(3), "type": "hyrox_stations",
         "instructions": "4 rondas run+wall balls+sled",
         "structure": RAW,
     }, user, db)
@@ -115,8 +115,8 @@ def test_add_workout_tool_persiste_structure(db, user):
     assert out["workout"]["structure"]["objective"]
 
 
-def test_update_workout_tool_actualiza_structure(db, user):
-    out = agent_tools.execute_tool("add_workout", {"date": "2026-09-18", "type": "hyrox_sim"}, user, db)
+def test_update_workout_tool_actualiza_structure(db, user, soon):
+    out = agent_tools.execute_tool("add_workout", {"date": soon(4), "type": "hyrox_sim"}, user, db)
     wid = out["workout_id"]
     out2 = agent_tools.execute_tool("update_workout", {"workout_id": wid, "structure": RAW}, user, db)
     assert out2["ok"]

@@ -35,10 +35,24 @@ def test_patch_type_mobility(db, user):
     assert out["type"] == "mobility"
 
 
+def _lunes_que_viene():
+    """Próximo lunes (hora española): las sesiones recurrentes no se planifican en el pasado."""
+    from datetime import timedelta
+    from app.services.clock import today_madrid
+    t = today_madrid()
+    return t + timedelta(days=7 - t.weekday())
+
+
+def _rango(dias: int):
+    from datetime import timedelta
+    lunes = _lunes_que_viene()
+    return lunes.isoformat(), (lunes + timedelta(days=dias - 1)).isoformat()
+
+
 def test_add_recurring_mobility_todos_los_dias(db, user):
     from app.services.agent_tools import _tool_add_recurring_workout
     out = _tool_add_recurring_workout(
-        {"type": "mobility", "start_date": "2026-06-01", "end_date": "2026-06-07",
+        {"type": "mobility", "start_date": _rango(7)[0], "end_date": _rango(7)[1],
          "duration_min": 15, "instructions": "Movilidad articular 15'"},
         user, db,
     )
@@ -54,14 +68,14 @@ def test_add_recurring_solo_dias_concretos_y_sin_duplicar(db, user):
     from app.services.agent_tools import _tool_add_recurring_workout
     # Lunes(0) y jueves(3) de una semana -> 2 sesiones
     out = _tool_add_recurring_workout(
-        {"type": "strength_upper", "start_date": "2026-06-01", "end_date": "2026-06-07",
+        {"type": "strength_upper", "start_date": _rango(7)[0], "end_date": _rango(7)[1],
          "days_of_week": [0, 3]},
         user, db,
     )
     assert out["created"] == 2
     # Repetir no duplica
     out2 = _tool_add_recurring_workout(
-        {"type": "strength_upper", "start_date": "2026-06-01", "end_date": "2026-06-07",
+        {"type": "strength_upper", "start_date": _rango(7)[0], "end_date": _rango(7)[1],
          "days_of_week": [0, 3]},
         user, db,
     )
@@ -77,7 +91,7 @@ def test_recurring_se_asocia_al_objetivo_activo(db, user):
     db.add(g); db.commit(); db.refresh(g)
 
     out = _tool_add_recurring_workout(
-        {"type": "mobility", "start_date": "2026-07-01", "end_date": "2026-07-03"},
+        {"type": "mobility", "start_date": _rango(3)[0], "end_date": _rango(3)[1]},
         user, db,
     )
     assert out["created"] == 3

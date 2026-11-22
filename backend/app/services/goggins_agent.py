@@ -9,6 +9,7 @@ Combina:
 """
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterator
 
@@ -22,7 +23,7 @@ from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
 from app.services import ai_client, agent_tools, hyrox_knowledge, record_labels, wod_structure
-from app.services.clock import today_madrid, weekday_es
+from app.services.clock import now_madrid, to_madrid, today_madrid, weekday_es
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Ú
 - `delete_workout(workout_id)` — para eliminar un entreno.
 - `add_workout(date, type, ...)` — para añadir UN entreno nuevo en una fecha concreta.
 - `add_recurring_workout(type, start_date, end_date, days_of_week?, ...)` — para añadir el MISMO entreno repetido en muchas fechas DE UNA VEZ. Úsalo SIEMPRE para peticiones recurrentes ("movilidad todos los días", "fuerza tren superior los lunes y jueves", "core 3x/semana"). NO llames a add_workout en bucle: usa esta. Si no pasas days_of_week, lo crea todos los días del rango. Tipos útiles: `mobility` (movilidad), `strength_upper` (tren superior), `strength_lower` (tren inferior), `strength_full`.
+- `add_weekly_session(type, weekday?, start_date?, end_date?, structure?, ...)` — UNA sesión más por semana durante todo el plan (o el tramo que indiques). Si el atleta no dice el día, ELIGE ella el día libre. Úsala para "un día más de entreno a la semana", "añade una sesión de X cada semana". Ya se salta los días pasados y las semanas de carrera, y asocia cada sesión al objetivo de su fecha.
+- `set_training_days_per_week(days)` — guarda cuántos días a la semana entrena el atleta, para que los planes futuros lo respeten. Llámala TAMBIÉN cuando pida entrenar un día más o menos de forma permanente.
 - `mark_workout_status(workout_id, status)` — para marcar como completado o saltado.
 - `list_workouts(start_date, end_date)` — si necesitas buscar workouts fuera del contexto inicial.
 - `shift_plan(days|weeks, from_date)` — desplaza TODOS los workouts futuros del plan N días o semanas. Úsalo para "no puedo entrenar esta semana / estos días": muévelo todo de golpe en vez de uno a uno.
@@ -79,12 +82,23 @@ Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Ú
 - `compare_planned_vs_actual(start_date, end_date)` — compara lo planificado con lo realmente hecho en el rango. Úsalo para detectar desfases y justificar subir/bajar la carga.
 
 FECHAS (CRÍTICO — aquí es donde más errores se cometen):
+- El campo `calendar` del contexto lista los próximos 21 días con su día de la semana y a qué semana pertenecen ("esta semana", "semana que viene"). Para convertir "el viernes" o "el jueves de la semana que viene" en fecha, BÚSCALO ahí: NUNCA calcules fechas de cabeza. `this_week` y `next_week` dan lunes y domingo de cada una.
+- Cada mensaje del atleta en el historial lleva `[Enviado el ... a las ...]`: su "hoy", "mañana" o "esta semana" se refieren a ESA fecha, no a la de ahora. No copies esos corchetes en tus respuestas.
 - La fecha de HOY está en `today` del contexto (date, weekday, tomorrow). Es LA ÚNICA verdad: NUNCA deduzcas qué día es por tu cuenta ni por el historial.
 - "el entreno de hoy" = el workout de `upcoming_workouts` con `is_today: true` (o `date == today.date`). "mañana" = `today.tomorrow`. Si el atleta dice un día de la semana ("el del jueves"), busca el `weekday` que coincida MÁS CERCANO en el futuro.
 - Las referencias relativas de mensajes ANTIGUOS del historial ("hoy", "mañana") se referían a SU día, no al actual: no las arrastres.
 - Antes de mover/editar, di en tu respuesta la fecha resuelta con su día ("te muevo el de HOY, sábado 4, al lunes 6") para que el atleta detecte al instante si te equivocas.
 
+UN DÍA MÁS (O MENOS) A LA SEMANA — receta:
+1. Mira en `calendar` y `upcoming_workouts` qué días de la semana están libres.
+2. Llama a `add_weekly_session` con el tipo que más le convenga según su objetivo y sus puntos flojos (si es Hyrox o fuerza, con su `structure`). NO llames a add_workout en bucle.
+3. Llama a `set_training_days_per_week` con el nuevo total de días.
+4. Confirma en 2 frases: qué día de la semana, desde cuándo hasta cuándo y cuántas sesiones se crearon (lo dice el resultado de la tool).
+
 REGLAS DE TOOL USE:
+- Si el atleta pide un cambio, tu PRIMERA acción es llamar a la tool (como mucho una frase corta antes). NUNCA escribas "hecho", "listo" o "metido" hasta tener el resultado con ok:true.
+- Los días de carrera (type `race`) no se mueven ni se borran salvo que el atleta lo pida expresamente.
+- Al añadir workouts NO pases `goal_id` salvo que lo tengas en `active_goals`: si lo omites, se asocia solo al objetivo de esa fecha.
 - Los workout_ids están en el contexto que te paso (campo `id` de cada workout en `upcoming_workouts`). Úsalos.
 - Si el atleta pide algo ambiguo ("muéveme el de mañana"), elige el más probable basándote en el contexto y CONFIRMA en tu respuesta qué hiciste.
 - Después de ejecutar una tool, responde como Goggins: confirma el cambio en 1-2 frases con tono duro-motivador. NO listes datos crudos del JSON, escribe como humano.
@@ -137,6 +151,7 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         if g.target_race_date:
             days_to = (g.target_race_date - today).days
         goals_list.append({
+            "id": g.id,
             "type": g.type.value if hasattr(g.type, "value") else g.type,
             "sport": g.sport,
             "description": g.description,
@@ -203,7 +218,7 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             Workout.date <= today + timedelta(days=14),
         )
         .order_by(Workout.date.asc())
-        .limit(20)
+        .limit(80)
         .all()
     )
     upcoming_list = [
@@ -253,6 +268,7 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         except Exception:
             fitness_snapshot = None
 
+    this_monday = today - timedelta(days=today.weekday())
     return {
         # Fecha REAL del atleta (hora española). "hoy"/"mañana" se resuelven
         # SIEMPRE contra esto, nunca contra el conocimiento del modelo.
@@ -262,6 +278,13 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             "tomorrow": (today + timedelta(days=1)).isoformat(),
             "tomorrow_weekday": weekday_es(today + timedelta(days=1)),
         },
+        "this_week": {"monday": this_monday.isoformat(), "sunday": (this_monday + timedelta(days=6)).isoformat()},
+        "next_week": {
+            "monday": (this_monday + timedelta(days=7)).isoformat(),
+            "sunday": (this_monday + timedelta(days=13)).isoformat(),
+        },
+        # Calendario ya calculado: el modelo NO debe deducir fechas de cabeza.
+        "calendar": _calendar(today),
         "profile": profile,
         "active_goals": goals_list,
         "personal_records": records_list,
@@ -275,8 +298,32 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
     }
 
 
+def _calendar(today: date, days: int = 21) -> list[str]:
+    """Los próximos `days` días, uno por línea: fecha, día de la semana y a qué semana pertenece."""
+    this_monday = today - timedelta(days=today.weekday())
+    out = []
+    for i in range(days):
+        d = today + timedelta(days=i)
+        n = (d - timedelta(days=d.weekday()) - this_monday).days // 7
+        semana = "esta semana" if n == 0 else "semana que viene" if n == 1 else f"dentro de {n} semanas"
+        marca = " · HOY" if i == 0 else " · MAÑANA" if i == 1 else ""
+        out.append(f"{d.isoformat()} {weekday_es(d)}{marca} · {semana}")
+    return out
+
+
+def _stamp(dt: datetime, *, now: bool = False) -> str:
+    """Etiqueta de fecha/hora (España) para anteponer a un mensaje del atleta."""
+    local = to_madrid(dt)
+    cuando = f"{weekday_es(local.date())} {local:%d/%m/%Y} a las {local:%H:%M}"
+    return f"[Enviado ahora: {cuando}]" if now else f"[Enviado el {cuando}]"
+
+
 def _load_history(user_id: int, db: Session, limit: int = 20) -> list[dict[str, str]]:
-    """Carga los últimos N mensajes del historial en orden cronológico."""
+    """Carga los últimos N mensajes del historial en orden cronológico.
+
+    Cada mensaje del atleta lleva la fecha en que lo envió: sus "hoy"/"mañana"
+    se anclan a ESE día y no se arrastran como si fueran el actual.
+    """
     rows = (
         db.query(ChatMessage)
         .filter(ChatMessage.user_id == user_id)
@@ -285,7 +332,72 @@ def _load_history(user_id: int, db: Session, limit: int = 20) -> list[dict[str, 
         .all()
     )
     rows.reverse()
-    return [{"role": r.role, "content": r.content} for r in rows]
+    out = []
+    for r in rows:
+        content = r.content
+        if r.role == "user" and r.created_at:
+            content = f"{_stamp(r.created_at)}\n{content}"
+        out.append({"role": r.role, "content": content})
+    return out
+
+
+# ── Honestidad al editar el plan ─────────────────────────────────────────────
+# El modelo a veces escribe "hecho, te lo he metido" SIN haber llamado a la tool,
+# y el plan no cambia. Se detecta (petición de cambio + afirmación + ninguna
+# tool de edición con éxito) y se le obliga a ejecutarla o a corregirse.
+
+_PART = r"(?:met|a[ñn]adid|agregad|movid|cambiad|ajustad|borrad|eliminad|cread|programad|actualizad|desplazad|incluid|sustituid|reprogramad|marcad)"
+_CLAIM_RES = [
+    re.compile(rf"\b(?:he|hemos|ya|queda|quedan|te\s+(?:lo|la|los|las))\s+(?:\w+\s+){{0,2}}{_PART}(?:ido|[oa]s?)\b", re.I),
+    re.compile(rf"^\W*{_PART}(?:ido|[oa]s?)\b", re.I),
+    re.compile(rf"\b{_PART}(?:ido|[oa]s?)\s*[:.!]", re.I),
+    re.compile(r"^\W*(?:hecho|listo|perfecto|ok)\b\W*$", re.I),
+    re.compile(r"\b(?:lo|la|los|las|te\s+lo|te\s+la)\s+(?:meto|pongo|a[ñn]ado|muevo|cambio|ajusto|borro|elimino|creo|programo)\b", re.I),
+    re.compile(r"\bya\s+est[aá]\s+(?:en|metid|añadid|hecho)", re.I),
+]
+_HEDGE_RE = re.compile(r"\b(no|nunca|tampoco|todav[ií]a|a[uú]n|sin|si\s+quieres|si\s+prefieres|d[ií]melo)\b|¿", re.I)
+_ASKS_RE = re.compile(
+    r"\b(?:m[eé]te(?:me|lo|la|los|las)?|a[ñn][aá]de(?:me|lo|la)?|agrega(?:me|lo|la)?|pon(?:me|le|lo|la|los|las)?|"
+    r"quita(?:me|lo|la|los|las)?|borra(?:me|lo|la|los|las)?|elimina(?:me|lo|la)?|mu[eé]ve(?:me|lo|la)?|"
+    r"cambia(?:me|lo|la)?|ajusta(?:me|lo|la)?|sube|baja|desplaza|programa(?:me)?|apunta(?:me)?|inclu[yi]e?|"
+    r"reduce|aumenta|sustituye|reemplaza|haz(?:me)?|crea(?:me)?|quiero|necesito|puedes|podr[ií]as)\b"
+    r"|un d[ií]a m[aá]s|otro d[ií]a|m[aá]s d[ií]as",
+    re.I,
+)
+
+
+def claims_plan_change(text: str) -> bool:
+    """True si el texto AFIRMA haber cambiado el plan (ignora negaciones y ofrecimientos)."""
+    for sentence in re.split(r"(?<=[.!?\n])\s+", text or ""):
+        sentence = sentence.strip()
+        if not sentence or _HEDGE_RE.search(sentence):
+            continue
+        if any(rx.search(sentence) for rx in _CLAIM_RES):
+            return True
+    return False
+
+
+def asks_plan_change(text: str) -> bool:
+    """True si el atleta está PIDIENDO un cambio del plan (verbos de petición)."""
+    return bool(_ASKS_RE.search(text or ""))
+
+
+# Tools que modifican datos: solo un resultado ok de una de estas cuenta como "cambio hecho".
+MUTATING_TOOLS = {
+    "move_workout", "update_workout", "delete_workout", "add_workout", "add_recurring_workout",
+    "add_weekly_session", "mark_workout_status", "shift_plan", "adjust_week_load",
+    "set_training_days_per_week", "set_training_feedback",
+}
+
+_GUARD_MESSAGE = (
+    "[SISTEMA] Tu respuesta afirma que has modificado el plan, pero en este turno NO has ejecutado con éxito "
+    "ninguna herramienta de edición, así que el plan NO ha cambiado. Ejecuta AHORA la herramienta que corresponda "
+    "y, cuando tengas su resultado, confirma. Si en realidad no tocaba cambiar nada, corrige tu respuesta sin "
+    "afirmar cambios."
+)
+_NO_CHANGE_NOTICE = (
+    "\n\nAviso: No he ejecutado ningún cambio en tu plan. Pídemelo otra vez con el día exacto y lo hago."
+)
 
 
 MAX_TOOL_ITERATIONS = 12
@@ -343,8 +455,9 @@ def chat_stream(
     )
 
     history = _load_history(user.id, db, limit=20)
+    # El mensaje de AHORA también va con su fecha y hora (el guardado en BD, limpio).
     messages: list[dict[str, Any]] = list(history) + [
-        {"role": "user", "content": user_message}
+        {"role": "user", "content": f"{_stamp(now_madrid(), now=True)}\n{user_message}"}
     ]
 
     # Persistir el mensaje del usuario antes de llamar a Claude
@@ -356,6 +469,9 @@ def chat_stream(
     client = ai_client.get_client()
     final_text_parts: list[str] = []
     mutations: list[dict[str, Any]] = []
+    wants_change = asks_plan_change(user_message)
+    changed_plan = False      # ¿alguna tool de edición terminó con éxito en este turno?
+    retried = False
 
     try:
         for iteration in range(MAX_TOOL_ITERATIONS):
@@ -388,6 +504,19 @@ def chat_stream(
             )
 
             if final_msg.stop_reason != "tool_use":
+                dice_que_cambio = claims_plan_change("".join(iteration_text))
+                if wants_change and dice_que_cambio and not changed_plan:
+                    if not retried:
+                        # Afirmó un cambio sin ejecutarlo: se retira ese texto y se le
+                        # obliga a ejecutar la tool (o a corregirse).
+                        retried = True
+                        if iteration_text:
+                            final_text_parts.pop()
+                        yield {"phase": "retract"}
+                        messages.append({"role": "user", "content": _GUARD_MESSAGE})
+                        continue
+                    final_text_parts.append(_NO_CHANGE_NOTICE.strip())
+                    yield {"phase": "chunk", "text": _NO_CHANGE_NOTICE}
                 break
 
             # Ejecutar todos los tool_use blocks de esta respuesta
@@ -410,6 +539,8 @@ def chat_stream(
                 if result.get("ok") and result.get("mutation"):
                     mutations.append(result)
                     yield {"phase": "mutation", "data": result}
+                if result.get("ok") and tool_name in MUTATING_TOOLS:
+                    changed_plan = True
 
                 tool_results.append(
                     {

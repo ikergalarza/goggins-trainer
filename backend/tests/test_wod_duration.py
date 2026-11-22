@@ -185,17 +185,17 @@ def test_el_plan_generado_recalcula_la_duracion_de_los_wods(db, user):
     assert rows[WorkoutType.easy_run].planned_duration_min == 48  # lo que no tiene WOD no se toca
 
 
-def test_goggins_add_workout_con_structure_calcula_la_duracion(db, user):
+def test_goggins_add_workout_con_structure_calcula_la_duracion(db, user, soon):
     out = agent_tools.execute_tool("add_workout", {
-        "date": "2026-12-02", "type": "hyrox_stations", "duration_min": 60, "structure": EJEMPLO,
+        "date": soon(2), "type": "hyrox_stations", "duration_min": 60, "structure": EJEMPLO,
     }, user, db)
     assert out["ok"]
     w = db.query(Workout).get(out["workout_id"])
     assert 35 <= w.planned_duration_min <= 42
 
 
-def test_goggins_update_con_structure_recalcula_pero_sin_structure_respeta_lo_pedido(db, user):
-    out = agent_tools.execute_tool("add_workout", {"date": "2026-12-03", "type": "hyrox_sim"}, user, db)
+def test_goggins_update_con_structure_recalcula_pero_sin_structure_respeta_lo_pedido(db, user, soon):
+    out = agent_tools.execute_tool("add_workout", {"date": soon(3), "type": "hyrox_sim"}, user, db)
     wid = out["workout_id"]
     agent_tools.execute_tool("update_workout", {"workout_id": wid, "structure": EJEMPLO}, user, db)
     db.expire_all()

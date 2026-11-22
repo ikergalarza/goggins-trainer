@@ -18,6 +18,7 @@ from app.models.user import User
 from app.models.workout import Workout
 from app.models.chat_message import ChatMessage
 from app.services import ai_client
+from app.services.clock import today_madrid
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ def generate_for_completed(user: User, workouts: list[Workout], db: Session) -> 
     'De ahora en adelante': ignora los de fecha antigua (histórico) para no
     inundar el chat al sincronizar Strava por primera vez.
     """
-    cutoff = date.today() - timedelta(days=RECENT_DAYS)
+    cutoff = today_madrid() - timedelta(days=RECENT_DAYS)
     count = 0
     for w in workouts:
         if not w.date or w.date < cutoff:
