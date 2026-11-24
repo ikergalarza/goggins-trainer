@@ -302,3 +302,172 @@ def test_si_tras_el_aviso_sigue_prometiendo_se_le_avisa_al_atleta(db, user, monk
     _fake_ai(monkeypatch, [(PROMESA, [_Text(PROMESA)], "end_turn"), (PROMESA, [_Text(PROMESA)], "end_turn")])
     done = _correr(user, db, "mete un día más de entrenamiento a la semana")[-1]
     assert "No he ejecutado ningún cambio" in done["content"] and done["mutations"] == []
+
+
+# --- el bucle NO se corta en silencio ------------------------------------------
+# Síntoma real: dos respuestas largas acababan en "…con WOD completo y pesos de tu división:"
+# y no se había creado nada. Eran llamadas a herramienta cortadas por el límite de longitud
+# (max_tokens), que el bucle trataba como el final normal del turno.
+
+def _cortada(texto, *bloques):
+    return (texto, [_Text(texto), *bloques], "max_tokens")
+
+
+def test_una_llamada_cortada_por_longitud_no_se_ejecuta_se_avisa_al_modelo_y_se_reintenta(db, user, monkeypatch):
+    llamadas = _fake_ai(monkeypatch, [
+        _cortada("Lo arreglo AHORA con un segundo Hyrox cada semana:", _ToolUse("t0", "add_workout", {"date": "2026-11-2"})),
+        ("", [_ToolUse("t1", "add_workout", {"date": "2026-11-27", "type": "hyrox_stations"})], "tool_use"),
+        ("Viernes 27 metido.", [_Text("Viernes 27 metido.")], "end_turn"),
+    ])
+    eventos = _correr(user, db, "mete un hyrox el viernes")
+    assert db.query(Workout).count() == 1                                   # solo la llamada completa
+    previo = llamadas[1]["messages"][-2]                                    # lo que el modelo "dijo" antes
+    assert previo["role"] == "assistant" and all(b["type"] != "tool_use" for b in previo["content"])
+    aviso = llamadas[1]["messages"][-1]
+    assert aviso["role"] == "user" and "se cortó por longitud" in aviso["content"] and "NO se ejecutó" in aviso["content"]
+    assert eventos[-1]["phase"] == "done" and "continúa" not in eventos[-1]["content"].lower()
+
+
+def test_si_se_corta_una_y_otra_vez_se_lo_dice_al_atleta_y_como_seguir(db, user, monkeypatch):
+    cortada = _cortada("Voy a añadirlos:", _ToolUse("t", "add_workout", {}))
+    llamadas = _fake_ai(monkeypatch, [cortada, cortada, cortada])
+    done = _correr(user, db, "mete un hyrox el viernes")[-1]
+    assert len(llamadas) == 3                                               # el original + 2 reintentos
+    assert "se cortó" in done["content"] and "continúa" in done["content"].lower()
+    assert "No he ejecutado ningún cambio" in done["content"] or "ningún cambio" in done["content"].lower()
+
+
+def test_al_llegar_al_limite_de_pasos_dice_lo_hecho_y_como_continuar(db, user, monkeypatch):
+    monkeypatch.setattr(goggins_agent, "MAX_TOOL_ITERATIONS", 3)
+    paso = ("", [_ToolUse("t", "add_workout", {"date": "2026-11-27", "type": "easy_run"})], "tool_use")
+    _fake_ai(monkeypatch, [paso, paso, paso])
+    done = _correr(user, db, "mete rodajes")[-1]
+    assert "sin margen" in done["content"] and "continúa" in done["content"].lower()
+    assert "add_workout" in done["content"] and "3" in done["content"]      # qué y cuántas veces se hizo
+
+
+def test_lo_realmente_ejecutado_queda_en_el_historial_y_llega_al_modelo_en_el_turno_siguiente(db, user, monkeypatch):
+    _fake_ai(monkeypatch, [
+        ("", [_ToolUse("t1", "add_workout", {"date": "2026-11-27", "type": "easy_run"})], "tool_use"),
+        ("Listo, viernes metido.", [_Text("Listo, viernes metido.")], "end_turn"),
+    ])
+    _correr(user, db, "mete un rodaje el viernes")
+    asistente = [m for m in goggins_agent._load_history(user.id, db) if m["role"] == "assistant"][-1]["content"]
+    assert asistente.startswith("Listo, viernes metido.")
+    assert "Registro del sistema" in asistente and "add_workout ×1" in asistente
+
+    llamadas = _fake_ai(monkeypatch, [("Dime.", [_Text("Dime.")], "end_turn")])
+    _correr(user, db, "hola")
+    previos = [m["content"] for m in llamadas[0]["messages"] if m["role"] == "assistant"]
+    assert any("Registro del sistema" in c and "add_workout ×1" in c for c in previos)
+    # lo que ve el atleta en el chat sigue limpio
+    assert "Registro del sistema" not in db.query(ChatMessage).filter_by(role="assistant").first().content
+
+
+def test_los_fallos_tambien_quedan_en_el_registro(db, user, monkeypatch):
+    _fake_ai(monkeypatch, [
+        ("", [_ToolUse("t1", "add_workout", {"date": "2025-11-27", "type": "easy_run"})], "tool_use"),
+        ("No pude.", [_Text("No pude.")], "end_turn"),
+    ])
+    _correr(user, db, "mete un rodaje el viernes")
+    asistente = [m for m in goggins_agent._load_history(user.id, db) if m["role"] == "assistant"][-1]["content"]
+    assert "✗ add_workout ×1" in asistente
+
+
+def test_las_consultas_no_ensucian_el_registro(db, user, monkeypatch):
+    _fake_ai(monkeypatch, [
+        ("", [_ToolUse("t1", "plan_overview", {})], "tool_use"),
+        ("Tienes 3 sesiones.", [_Text("Tienes 3 sesiones.")], "end_turn"),
+    ])
+    _correr(user, db, "¿cuántas sesiones tengo?")
+    asistente = [m for m in goggins_agent._load_history(user.id, db) if m["role"] == "assistant"][-1]["content"]
+    assert "Registro del sistema" not in asistente
+
+
+def test_dos_mensajes_del_mismo_segundo_no_se_intercambian_en_el_historial(db, user):
+    from datetime import datetime, timezone
+    t = datetime(2026, 11, 22, 9, 0, 0, tzinfo=timezone.utc)
+    db.add(ChatMessage(user_id=user.id, role="user", content="uno", created_at=t))
+    db.add(ChatMessage(user_id=user.id, role="assistant", content="dos", created_at=t))
+    db.add(ChatMessage(user_id=user.id, role="user", content="tres", created_at=t))
+    db.commit()
+    assert [m["role"] for m in goggins_agent._load_history(user.id, db)] == ["user", "assistant", "user"]
+
+
+# --- el contexto trae el plan por semanas contado por el servidor ---------------
+
+def test_el_contexto_trae_el_plan_por_semanas_contado_por_el_servidor(db, user, make_workout):
+    g = Goal(user_id=user.id, type=GoalType.hyrox, description="Hyrox", target_race_date=date(2026, 12, 20), is_active=True)
+    db.add(g); db.commit()
+    make_workout(user, goal=g, date=date(2026, 12, 12), type=WorkoutType.hyrox_sim)         # semana del 7
+    make_workout(user, goal=g, date=date(2026, 12, 17), type=WorkoutType.hyrox_stations)    # semana del 14
+    ctx = goggins_agent._build_athlete_context(user, db)
+    lineas = {l.split(" · ")[0]: l for l in ctx["plan_weeks"]}
+    # una sesión el sábado 12 y otra el jueves 17: UNA por semana, no dos en la misma
+    assert "hyrox 1" in lineas["2026-12-07"] and "hyrox 1" in lineas["2026-12-14"]
+    assert ctx["plan_weeks"][0].startswith("2026-11-16")                                    # arranca en la semana de HOY
+    assert ctx["plan_weeks"][-1].startswith("2026-12-14")                                   # y acaba en la de la carrera
+
+
+# --- herramientas de lectura compactas ------------------------------------------
+
+def test_list_workouts_va_compacto_sin_el_wod_entero(db, user, make_workout):
+    from app.services.agent_tools import execute_tool
+    make_workout(user, date=date(2026, 11, 23), structure={"blocks": [{"items": [{"exercise": "run", "distance_m": 400}]}]})
+    w = execute_tool("list_workouts", {"start_date": "2026-11-23", "end_date": "2026-11-23"}, user, db)["workouts"][0]
+    assert "structure" not in w and "instructions" not in w
+    assert w["has_wod"] is True and w["weekday"] == "lunes"
+    det = execute_tool("list_workouts", {"start_date": "2026-11-23", "end_date": "2026-11-23", "include_details": True}, user, db)
+    assert det["workouts"][0]["structure"]["blocks"]
+
+
+def test_el_detalle_completo_solo_para_pocas_sesiones(db, user, make_workout):
+    from app.services.agent_tools import execute_tool
+    for _ in range(9):
+        make_workout(user, date=date(2026, 11, 23))
+    out = execute_tool("list_workouts", {"start_date": "2026-11-23", "end_date": "2026-11-23", "include_details": True}, user, db)
+    assert not out["ok"] and "máximo" in out["error"].lower() or "máx" in out["error"].lower()
+
+
+def test_plan_overview_cuenta_por_semanas_y_valida_fechas(db, user, make_workout):
+    from app.services.agent_tools import execute_tool
+    make_workout(user, date=date(2026, 12, 12), type=WorkoutType.hyrox_sim)
+    make_workout(user, date=date(2026, 12, 17), type=WorkoutType.hyrox_stations)
+    out = execute_tool("plan_overview", {"start_date": "2026-12-07", "end_date": "2026-12-20"}, user, db)
+    assert out["ok"] and [w["counts"]["hyrox"] for w in out["weeks"]] == [1, 1]
+    assert out["summary_lines"][0].startswith("2026-12-07")
+    assert not execute_tool("plan_overview", {"start_date": "2025-01-01"}, user, db)["ok"]
+
+
+def test_el_prompt_enseña_a_usar_las_herramientas_de_varias_semanas():
+    p = goggins_agent.SYSTEM_PROMPT
+    assert "adapt_weekly_plan" in p and "plan_overview" in p
+    assert "NUNCA cuentes" in p and "Registro del sistema" in p
+
+
+# --- lo que ve el atleta sale limpio -------------------------------------------
+
+def test_el_registro_y_las_etiquetas_de_fecha_no_se_cuelan_en_lo_que_ve_el_atleta(db, user, monkeypatch):
+    sucio = ("[Enviado ahora: domingo 22/11/2026 a las 10:15]\nListo, viernes metido.\n\n"
+             "[Registro del sistema — lo que SE EJECUTÓ de verdad en ese turno (fíate de esto, no del texto): ✓ add_workout ×1]")
+    _fake_ai(monkeypatch, [(sucio, [_Text(sucio)], "end_turn")])
+    done = _correr(user, db, "¿qué tal?")[-1]
+    assert done["content"] == "Listo, viernes metido."
+    assert db.query(ChatMessage).filter_by(role="assistant").one().content == "Listo, viernes metido."
+
+
+def test_leer_el_plan_de_hace_semanas_si_se_puede(db, user, make_workout):
+    from app.services.agent_tools import execute_tool
+    make_workout(user, date=date(2026, 10, 26), type=WorkoutType.hyrox_stations)           # hace 4 semanas
+    out = execute_tool("plan_overview", {"start_date": "2026-10-26", "end_date": "2026-11-01"}, user, db)
+    assert out["ok"] and out["weeks"][0]["counts"]["hyrox"] == 1
+
+
+def test_toda_herramienta_nueva_esta_clasificada_como_de_lectura_o_de_edicion():
+    """Si una tool que modifica datos no está en MUTATING_TOOLS, no cuenta como "cambio hecho" para la
+    guarda y no queda en el registro del historial. Esto obliga a clasificar cada herramienta nueva."""
+    from app.services import agent_tools
+    solo_lectura = {"list_workouts", "plan_overview", "get_strava_summary", "compare_planned_vs_actual"}
+    todas = {t["name"] for t in agent_tools.TOOLS}
+    assert solo_lectura <= todas
+    assert goggins_agent.MUTATING_TOOLS == todas - solo_lectura

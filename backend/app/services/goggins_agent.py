@@ -22,7 +22,7 @@ from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
-from app.services import ai_client, agent_tools, hyrox_knowledge, record_labels, wod_structure
+from app.services import ai_client, agent_tools, current_plan, hyrox_knowledge, plan_overview, record_labels, wod_structure
 from app.services.clock import now_madrid, to_madrid, today_madrid, weekday_es
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,8 @@ Tienes acceso a herramientas para EDITAR el plan de entrenamiento del atleta. Ú
 - `add_workout(date, type, ...)` — para añadir UN entreno nuevo en una fecha concreta.
 - `add_recurring_workout(type, start_date, end_date, days_of_week?, ...)` — para añadir el MISMO entreno repetido en muchas fechas DE UNA VEZ. Úsalo SIEMPRE para peticiones recurrentes ("movilidad todos los días", "fuerza tren superior los lunes y jueves", "core 3x/semana"). NO llames a add_workout en bucle: usa esta. Si no pasas days_of_week, lo crea todos los días del rango. Tipos útiles: `mobility` (movilidad), `strength_upper` (tren superior), `strength_lower` (tren inferior), `strength_full`.
 - `add_weekly_session(type, weekday?, start_date?, end_date?, structure?, ...)` — UNA sesión más por semana durante todo el plan (o el tramo que indiques). Si el atleta no dice el día, ELIGE ella el día libre. Úsala para "un día más de entreno a la semana", "añade una sesión de X cada semana". Ya se salta los días pasados y las semanas de carrera, y asocia cada sesión al objetivo de su fecha.
+- `plan_overview(start_date?, end_date?)` — resumen del plan POR SEMANAS (lun-dom) CONTADO POR EL SERVIDOR: sesiones de hyrox, running, fuerza..., días libres y los ids. Úsala SIEMPRE para contar o comprobar semanas.
+- `adapt_weekly_plan(hyrox_per_week?, remove_types?, start_date?, end_date?)` — aplica una REGLA SEMANAL a todo el plan en UNA llamada ("2 sesiones de Hyrox a la semana", "quita el gym/la fuerza"): cuenta cada semana, quita lo que sobra y añade las sesiones de Hyrox que falten con su WOD completo y los pesos de su división. Para peticiones sobre VARIAS semanas es la ÚNICA forma fiable.
 - `set_training_days_per_week(days)` — guarda cuántos días a la semana entrena el atleta, para que los planes futuros lo respeten. Llámala TAMBIÉN cuando pida entrenar un día más o menos de forma permanente.
 - `mark_workout_status(workout_id, status)` — para marcar como completado o saltado.
 - `list_workouts(start_date, end_date)` — si necesitas buscar workouts fuera del contexto inicial.
@@ -94,6 +96,14 @@ UN DÍA MÁS (O MENOS) A LA SEMANA — receta:
 2. Llama a `add_weekly_session` con el tipo que más le convenga según su objetivo y sus puntos flojos (si es Hyrox o fuerza, con su `structure`). NO llames a add_workout en bucle.
 3. Llama a `set_training_days_per_week` con el nuevo total de días.
 4. Confirma en 2 frases: qué día de la semana, desde cuándo hasta cuándo y cuántas sesiones se crearon (lo dice el resultado de la tool).
+
+REGLAS PARA VARIAS SEMANAS (aquí es donde más se falla):
+- Si la petición afecta a VARIAS semanas ("2 Hyrox a la semana", "sin gym hasta la carrera", "quita la fuerza"): UNA sola llamada a `adapt_weekly_plan`, con `end_date` = la fecha de la carrera de la que habla el atleta. NUNCA add_workout/delete_workout en bucle: la respuesta se corta, se queda a medias y el atleta se desespera.
+- NUNCA cuentes sesiones por semana de cabeza: usa `plan_weeks` del contexto o `plan_overview`. El sábado 12 y el jueves 17 son de semanas distintas.
+- Cuando la tool termine, confirma con SUS números (el informe semana a semana). Si devuelve `weeks_without_room`, díselo.
+- Si el atleta te repite una petición es que NO se aplicó bien: mira `plan_weeks` y el "Registro del sistema" del historial (lo que de verdad se ejecutó) antes de contestar. NUNCA le digas "ya estaba hecho" sin comprobarlo con `plan_overview`.
+- NO narres paso a paso antes de llamar a las tools ("ahora elimino...", "empiezo con..."): llama directamente y resume al final en pocas frases.
+- En el historial, el "[Registro del sistema ...]" de tus mensajes lista lo que SE EJECUTÓ de verdad en ese turno: fíate de él, no de lo que dijiste. No lo copies en tus respuestas.
 
 REGLAS DE TOOL USE:
 - Si el atleta pide un cambio, tu PRIMERA acción es llamar a la tool (como mucho una frase corta antes). NUNCA escribas "hecho", "listo" o "metido" hasta tener el resultado con ok:true.
@@ -285,6 +295,8 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         },
         # Calendario ya calculado: el modelo NO debe deducir fechas de cabeza.
         "calendar": _calendar(today),
+        # El plan entero por semanas, CONTADO por el servidor: el modelo no cuenta a mano.
+        "plan_weeks": _plan_weeks(user, db, today),
         "profile": profile,
         "active_goals": goals_list,
         "personal_records": records_list,
@@ -296,6 +308,16 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
         "user_edited_workouts": user_edited,
         "fitness_snapshot": fitness_snapshot,
     }
+
+
+def _plan_weeks(user: User, db: Session, today: date) -> list[str]:
+    """Una línea por semana (desde la de HOY hasta la última carrera del plan), contada por el servidor."""
+    races = [
+        g.target_race_date for g in current_plan.plan_goals(user.id, db, today)
+        if g.target_race_date and g.target_race_date >= today
+    ]
+    end = max(races) if races else today + timedelta(weeks=8)
+    return [plan_overview.week_line(w) for w in plan_overview.overview(db, user.id, today, end)[:30]]
 
 
 def _calendar(today: date, days: int = 21) -> list[str]:
@@ -327,7 +349,7 @@ def _load_history(user_id: int, db: Session, limit: int = 20) -> list[dict[str, 
     rows = (
         db.query(ChatMessage)
         .filter(ChatMessage.user_id == user_id)
-        .order_by(ChatMessage.created_at.desc())
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
         .limit(limit)
         .all()
     )
@@ -337,8 +359,83 @@ def _load_history(user_id: int, db: Session, limit: int = 20) -> list[dict[str, 
         content = r.content
         if r.role == "user" and r.created_at:
             content = f"{_stamp(r.created_at)}\n{content}"
+        elif r.role == "assistant" and r.tool_calls:
+            content += _registry(r.tool_calls)
         out.append({"role": r.role, "content": content})
     return out
+
+
+# ── Registro de lo que SE EJECUTÓ ────────────────────────────────────────────────
+# El historial solo guardaba el TEXTO de cada turno. Sin saber qué tools se ejecutaron
+# de verdad, en el turno siguiente el modelo se fiaba de lo que él mismo había dicho
+# ("fuerza eliminada, ahora creo los Hyrox...") y daba por hecho lo que no se hizo.
+
+_MAX_LOGGED_ACTIONS = 60
+
+
+def _registry(raw: str) -> str:
+    """Texto para anteponer a un mensaje del asistente en el historial: qué tools hicieron algo de verdad."""
+    try:
+        actions = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(actions, list):
+        return ""
+    grupos: dict[tuple[str, bool], list[str]] = {}
+    interrumpido = None
+    for a in actions:
+        if not isinstance(a, dict):
+            continue
+        if a.get("interrupted"):
+            interrumpido = a["interrupted"]
+            continue
+        name, ok = a.get("tool"), bool(a.get("ok"))
+        # Las consultas que salieron bien no aportan: solo lo que cambia datos y todo fallo.
+        if not name or (ok and name not in MUTATING_TOOLS):
+            continue
+        grupos.setdefault((name, ok), []).append(str(a.get("summary") or "")[:90])
+    if not grupos and not interrumpido:
+        return ""
+    partes = []
+    for (name, ok), resumenes in grupos.items():
+        ultimo = resumenes[-1]
+        partes.append(f"{'✓' if ok else '✗'} {name} ×{len(resumenes)}" + (f" ({ultimo})" if ultimo else ""))
+    if interrumpido:
+        partes.append("TURNO INTERRUMPIDO: no llegó a terminar la tarea")
+    texto = " · ".join(partes)[:700]
+    return f"\n\n[Registro del sistema — lo que SE EJECUTÓ de verdad en ese turno (fíate de esto, no del texto): {texto}]"
+
+
+_ECHO_RES = [
+    re.compile(r"^\s*\[Enviado[^\]]*\]\s*", re.I),                              # "[Enviado ahora: ...]" al empezar
+    re.compile(r"\s*\[Registro del sistema[^\]]*\]\s*$", re.I),                  # el registro al final
+]
+
+
+def _clean_reply(text: str) -> str:
+    """Quita lo que el sistema le inyecta al modelo (etiqueta de fecha, registro de acciones) si lo imita."""
+    for rx in _ECHO_RES:
+        text = rx.sub("", text)
+    return text.strip()
+
+
+def _actions_digest(actions: list[dict[str, Any]]) -> str:
+    """'3 × add_workout, 8 × delete_workout' (solo lo que cambió datos con éxito)."""
+    cuenta: dict[str, int] = {}
+    for a in actions:
+        if a.get("ok") and a.get("tool") in MUTATING_TOOLS:
+            cuenta[a["tool"]] = cuenta.get(a["tool"], 0) + 1
+    if not cuenta:
+        return "no llegué a ejecutar ningún cambio"
+    return "ya hecho: " + ", ".join(f"{n} × {t}" for t, n in cuenta.items())
+
+
+def _interruption_notice(kind: str, actions: list[dict[str, Any]]) -> str:
+    causa = "mi respuesta se cortó por límite de longitud" if kind == "length" else "me quedé sin margen de pasos"
+    return (
+        f"Aviso: {causa} antes de terminar; {_actions_digest(actions)}. "
+        "Escribe «continúa» y sigo donde me quedé."
+    )
 
 
 # ── Honestidad al editar el plan ─────────────────────────────────────────────
@@ -388,7 +485,7 @@ def asks_plan_change(text: str) -> bool:
 # Tools que modifican datos: solo un resultado ok de una de estas cuenta como "cambio hecho".
 MUTATING_TOOLS = {
     "move_workout", "update_workout", "delete_workout", "add_workout", "add_recurring_workout",
-    "add_weekly_session", "mark_workout_status", "shift_plan", "adjust_week_load",
+    "add_weekly_session", "adapt_weekly_plan", "mark_workout_status", "shift_plan", "adjust_week_load",
     "set_training_days_per_week", "set_training_feedback",
 }
 
@@ -409,7 +506,18 @@ _NO_CHANGE_NOTICE = (
 )
 
 
-MAX_TOOL_ITERATIONS = 12
+MAX_TOOL_ITERATIONS = 20
+# Una sola llamada a una tool con el WOD completo ocupa ~1.000 tokens: 2.500 no daba ni
+# para tres, y lo que se cortaba se perdía en silencio.
+CHAT_MAX_TOKENS = 8000
+MAX_TRUNCATIONS = 2
+
+_TRUNCATED_MESSAGE = (
+    "[SISTEMA] Tu respuesta se cortó por longitud ANTES de terminar: si estabas llamando a una herramienta, "
+    "esa llamada NO se ejecutó. No repitas lo que ya has dicho. Hazlo en pasos más pequeños: para cambios en "
+    "varias semanas usa `adapt_weekly_plan` o `add_weekly_session` (una sola llamada corta), y si es una sesión "
+    "suelta, una por llamada y sin texto de relleno."
+)
 
 
 def _content_block_to_dict(block: Any) -> dict[str, Any]:
@@ -482,6 +590,9 @@ def chat_stream(
     changed_plan = False      # ¿alguna tool de edición terminó con éxito en este turno?
     tool_calls = 0            # nº de tools ejecutadas en este turno (lectura o edición)
     retried = False
+    truncations = 0
+    interrupted: str | None = None            # 'length' | 'iterations': el turno acabó sin terminar la tarea
+    actions: list[dict[str, Any]] = []        # lo que se ejecutó de verdad (para el historial)
 
     try:
         for iteration in range(MAX_TOOL_ITERATIONS):
@@ -489,7 +600,7 @@ def chat_stream(
 
             with client.messages.stream(
                 model=ai_client.DEFAULT_MODEL,
-                max_tokens=2500,
+                max_tokens=CHAT_MAX_TOKENS,
                 system=full_system,
                 tools=agent_tools.TOOLS,
                 messages=messages,
@@ -512,6 +623,19 @@ def chat_stream(
                     "content": [_content_block_to_dict(b) for b in final_msg.content],
                 }
             )
+
+            if final_msg.stop_reason == "max_tokens":
+                # Respuesta CORTADA por longitud. Antes se trataba como el final normal del turno:
+                # la llamada a la tool que iba a ejecutarse se perdía y el atleta veía un texto que
+                # acababa en "…:" sin que se hubiera hecho nada.
+                truncations += 1
+                kept = [b for b in messages[-1]["content"] if b.get("type") != "tool_use"]
+                messages[-1]["content"] = kept or [{"type": "text", "text": "(respuesta cortada)"}]
+                if truncations <= MAX_TRUNCATIONS:
+                    messages.append({"role": "user", "content": _TRUNCATED_MESSAGE})
+                    continue
+                interrupted = "length"
+                break
 
             if final_msg.stop_reason != "tool_use":
                 texto = "".join(iteration_text)
@@ -556,8 +680,14 @@ def chat_stream(
                 if result.get("ok") and result.get("mutation"):
                     mutations.append(result)
                     yield {"phase": "mutation", "data": result}
-                if result.get("ok") and tool_name in MUTATING_TOOLS:
+                if result.get("ok") and tool_name in MUTATING_TOOLS and result.get("mutation"):
                     changed_plan = True
+                if len(actions) < _MAX_LOGGED_ACTIONS:
+                    actions.append({
+                        "tool": tool_name,
+                        "ok": bool(result.get("ok")),
+                        "summary": str(result.get("summary") or result.get("error") or "")[:160],
+                    })
 
                 tool_results.append(
                     {
@@ -572,15 +702,26 @@ def chat_stream(
             messages.append({"role": "user", "content": tool_results})
         else:
             logger.warning("[goggins_agent] alcanzado MAX_TOOL_ITERATIONS")
+            interrupted = "iterations"
     except Exception as e:
         logger.exception(f"[goggins_agent] stream falló: {e}")
         yield {"phase": "error", "detail": f"Error llamando a Claude: {e}"}
         return
 
-    full_text = "\n\n".join(p for p in final_text_parts if p).strip()
+    if interrupted:
+        aviso = _interruption_notice(interrupted, actions)
+        final_text_parts.append(aviso)
+        yield {"phase": "chunk", "text": "\n\n" + aviso}
+        actions.append({"interrupted": interrupted})
 
-    # Persistir respuesta del asistente
-    db.add(ChatMessage(user_id=user.id, role="assistant", content=full_text))
+    full_text = _clean_reply("\n\n".join(p for p in final_text_parts if p))
+
+    # Persistir respuesta del asistente (con el registro de lo ejecutado, que el atleta no ve
+    # pero el modelo sí recibe en el historial del turno siguiente)
+    db.add(ChatMessage(
+        user_id=user.id, role="assistant", content=full_text,
+        tool_calls=json.dumps(actions, ensure_ascii=False) if actions else None,
+    ))
     db.commit()
 
     yield {"phase": "done", "content": full_text, "mutations": mutations}

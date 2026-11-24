@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.services import current_plan as plan_svc, wod_duration, wod_structure
+from app.services import current_plan as plan_svc, hyrox_knowledge, hyrox_wods, plan_overview as po, wod_duration, wod_structure
 from app.services.clock import today_madrid, weekday_es
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.strava_activity import StravaActivity
@@ -88,9 +88,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "list_workouts",
         "description": (
-            "Lista los workouts del atleta en un rango de fechas. Usa esto si "
-            "necesitas encontrar workouts que no estén ya en el contexto inicial. "
-            "Devuelve id, fecha, tipo, distancia, duración y estado de cada uno."
+            "Lista los workouts del atleta en un rango de fechas (compacto: id, fecha, día, tipo, "
+            "estado, distancia, duración y si lleva WOD). Úsala para encontrar ids. Para CONTAR "
+            "sesiones por semana NO la uses: llama a plan_overview. `include_details` trae el WOD "
+            "completo, solo para unas pocas sesiones (máx. 8)."
         ),
         "input_schema": {
             "type": "object",
@@ -102,6 +103,63 @@ TOOLS: list[dict[str, Any]] = [
                 "end_date": {
                     "type": "string",
                     "description": "Fecha de fin inclusiva en formato YYYY-MM-DD. Por defecto +14 días.",
+                },
+                "include_details": {
+                    "type": "boolean",
+                    "description": "Incluye instrucciones y WOD completo. Solo para pocas sesiones (máx. 8).",
+                },
+            },
+        },
+    },
+    {
+        "name": "plan_overview",
+        "description": (
+            "Resumen del plan POR SEMANAS (lunes-domingo) CONTADO POR EL SERVIDOR: sesiones por categoría "
+            "(hyrox, run, fuerza...), total, días libres y las sesiones con su id. Úsala SIEMPRE para contar "
+            "o comprobar semanas ('¿tengo 2 Hyrox cada semana?', '¿cuántas sesiones esta semana?'): NUNCA "
+            "cuentes a mano. Sin fechas: de hoy a la última carrera."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Por defecto hoy."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD. Por defecto la última carrera."},
+            },
+        },
+    },
+    {
+        "name": "adapt_weekly_plan",
+        "description": (
+            "Aplica una REGLA SEMANAL a todo el plan en UNA sola llamada: '2 sesiones de Hyrox a la semana', "
+            "'quita el gym/la fuerza', 'sin gimnasio hasta la carrera'. Cuenta cada semana, quita lo que "
+            "sobra (solo sesiones planificadas, nunca lo hecho) y añade las sesiones de Hyrox que falten con "
+            "su WOD completo (pesos de su división) en los mejores días libres; no toca el pasado y, por "
+            "defecto, deja intacta la semana de carrera. Úsala SIEMPRE que la petición afecte a varias "
+            "semanas: NO llames a add_workout/delete_workout en bucle (se queda a medias). Devuelve el "
+            "informe semana a semana (antes→después): confirma al atleta con ESOS números."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hyrox_per_week": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5,
+                    "description": "Sesiones de Hyrox por semana (hyrox_stations + hyrox_sim). Añade las que falten.",
+                },
+                "remove_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tipos de sesión a quitar. 'strength' o 'gym' = toda la fuerza (strength_upper/lower/full); también tipos concretos.",
+                },
+                "start_date": {"type": "string", "description": "YYYY-MM-DD. Por defecto hoy."},
+                "end_date": {
+                    "type": "string",
+                    "description": "YYYY-MM-DD. Por defecto la última carrera del plan. Para 'hasta el Hyrox', pon la fecha de ESE Hyrox.",
+                },
+                "skip_race_week": {
+                    "type": "boolean",
+                    "description": "Por defecto true: no se añaden sesiones en la semana de carrera (taper).",
                 },
             },
         },
@@ -446,6 +504,27 @@ def _parse_date(s: str) -> date:
 # Implementaciones
 # ────────────────────────────────────────────────────────────────────
 
+# list_workouts devolvía el WOD entero (structure) de cada sesión: 41 sesiones eran
+# decenas de miles de tokens y el modelo acababa hojeándolas. Por defecto va
+# compacto; el detalle solo se pide para pocas sesiones.
+_MAX_LIST = 120
+_MAX_DETAIL = 8
+
+
+def _brief_workout(w: Workout) -> dict[str, Any]:
+    return {
+        "id": w.id,
+        "date": w.date.isoformat() if w.date else None,
+        "weekday": weekday_es(w.date) if w.date else None,
+        "type": w.type.value if hasattr(w.type, "value") else w.type,
+        "status": w.status.value if hasattr(w.status, "value") else w.status,
+        "distance_km": w.planned_distance_km,
+        "duration_min": w.planned_duration_min,
+        "has_wod": bool(w.structure),
+        "modified_by": w.modified_by,
+    }
+
+
 def _tool_list_workouts(input: dict, user: User, db: Session) -> dict:
     today = today_madrid()
     start = _parse_date(input["start_date"]) if input.get("start_date") else today
@@ -457,13 +536,57 @@ def _tool_list_workouts(input: dict, user: User, db: Session) -> dict:
             Workout.date >= start,
             Workout.date <= end,
         )
-        .order_by(Workout.date.asc())
+        .order_by(Workout.date.asc(), Workout.id.asc())
         .all()
     )
+    if input.get("include_details"):
+        if len(workouts) > _MAX_DETAIL:
+            return {"ok": False, "error": f"include_details solo para {_MAX_DETAIL} sesiones como máximo (hay {len(workouts)}). Acota el rango."}
+        return {"ok": True, "count": len(workouts), "workouts": [_serialize_workout(w) for w in workouts]}
+    truncated = len(workouts) > _MAX_LIST
     return {
         "ok": True,
         "count": len(workouts),
-        "workouts": [_serialize_workout(w) for w in workouts],
+        "workouts": [_brief_workout(w) for w in workouts[:_MAX_LIST]],
+        **({"truncated": True, "note": f"Solo las {_MAX_LIST} primeras; acota el rango o usa plan_overview."} if truncated else {}),
+    }
+
+
+def _check_read_date(d: date) -> str | None:
+    """Para LEER vale el pasado reciente (la comprobación estricta de _check_date es para editar)."""
+    today = today_madrid()
+    delta = (d - today).days
+    if delta < -400 or delta > _FUTURE_LIMIT_DAYS:
+        return (
+            f"La fecha {d.isoformat()} ({weekday_es(d)}) queda muy lejos de hoy ({weekday_es(today)} {today.isoformat()}). "
+            "Búscala en `calendar` del contexto y repite con la fecha correcta."
+        )
+    return None
+
+
+def _tool_plan_overview(input: dict, user: User, db: Session) -> dict:
+    """Resumen por semanas CONTADO POR EL SERVIDOR (lun-dom). Aquí se cuenta; el modelo no cuenta a mano."""
+    today = today_madrid()
+    goals = plan_svc.plan_goals(user.id, db, today)
+    races = sorted(g.target_race_date for g in goals if g.target_race_date and g.target_race_date >= today)
+    try:
+        start = _parse_date(input["start_date"]) if input.get("start_date") else today
+        end = _parse_date(input["end_date"]) if input.get("end_date") else (races[-1] if races else start + timedelta(weeks=8))
+    except Exception as e:
+        return {"ok": False, "error": f"Fecha inválida: {e}"}
+    bad = _check_read_date(start) or _check_read_date(end)
+    if bad:
+        return {"ok": False, "error": bad}
+    if end < start:
+        return {"ok": False, "error": "end_date debe ser >= start_date"}
+    if (end - start).days > 366:
+        return {"ok": False, "error": "Rango demasiado largo (máx. 1 año)"}
+    weeks = po.overview(db, user.id, start, end)
+    return {
+        "ok": True,
+        "weeks": weeks,
+        "summary_lines": [po.week_line(w) for w in weeks],
+        "summary": f"{len(weeks)} semanas, del {weeks[0]['week_start']} al {weeks[-1]['week_end']}",
     }
 
 
@@ -591,7 +714,7 @@ def _tool_add_workout(input: dict, user: User, db: Session) -> dict:
         "ok": True,
         "mutation": "add_workout",
         "workout_id": w.id,
-        "workout": _serialize_workout(w),
+        "workout": _brief_workout(w),
         "weekday": weekday_es(d),
         "goal_id": w.goal_id,
         "same_day_other_workouts": otros,
@@ -990,6 +1113,249 @@ def _tool_add_weekly_session(input: dict, user: User, db: Session) -> dict:
     }
 
 
+_STRENGTH_ALIASES = {"strength", "gym", "fuerza", "gimnasio"}
+# Para elegir el mejor día libre: se evita juntar sesiones duras y el día antes de la tirada larga.
+_HARD_TYPES = {
+    "tempo", "intervals", "long_run", "hill_repeats", "fartlek", "hyrox_sim", "hyrox_stations",
+    "strength_upper", "strength_lower", "strength_full", "race",
+}
+_ADAPT_WEEKDAY_SCORE = {0: 2, 1: 0, 2: 0, 3: 0, 4: 1, 5: 1, 6: 3}      # mejor entre semana (menos = mejor)
+
+
+def _expand_remove_types(raw: Any) -> tuple[set[str], str | None]:
+    if raw is None:
+        return set(), None
+    if not isinstance(raw, list):
+        return set(), "remove_types debe ser una lista de tipos"
+    out: set[str] = set()
+    for t in raw:
+        t = str(t).strip().lower()
+        if t in _STRENGTH_ALIASES:
+            out |= po.STRENGTH_TYPES
+        elif t in ("race", "rest"):
+            return set(), f"No se puede quitar el tipo '{t}'"
+        elif t in VALID_TYPES:
+            out.add(t)
+        else:
+            return set(), f"Tipo inválido en remove_types: {t}"
+    return out, None
+
+
+def _day_score(d: date, occupied: dict[date, list[str]], freed: set[date]) -> int:
+    """Menor = mejor día para una sesión de Hyrox nueva."""
+    score = _ADAPT_WEEKDAY_SCORE[d.weekday()]
+    for nb in (d - timedelta(days=1), d + timedelta(days=1)):
+        types = occupied.get(nb) or []
+        if any(t in po.HYROX_TYPES for t in types):
+            score += 6
+        elif any(t in _HARD_TYPES for t in types):
+            score += 4
+        elif types:
+            score += 1
+    if "long_run" in (occupied.get(d + timedelta(days=1)) or []):
+        score += 6                          # nunca el día antes de la tirada larga si hay otra opción
+    if d in freed:
+        score -= 5                          # el hueco que deja el gym es el sitio natural
+    return score
+
+
+def _hyrox_division_key(user: User, goals: list[Goal], d: date) -> str:
+    hy = [g for g in goals if hyrox_knowledge.is_hyrox_goal(g)]
+    goal = next((g for g in sorted(hy, key=lambda g: g.target_race_date or date.max)
+                 if g.target_race_date and g.target_race_date >= d), None) or (hy[0] if hy else None)
+    if goal:
+        return hyrox_knowledge.division_key(goal, user)
+    return "open_women" if (user.sex or "").upper() == "F" else "open_men"
+
+
+def _tool_adapt_weekly_plan(input: dict, user: User, db: Session) -> dict:
+    today = today_madrid()
+    goals = plan_svc.plan_goals(user.id, db, today) or (
+        db.query(Goal).filter(Goal.user_id == user.id, Goal.is_active.is_(True)).all()
+    )
+    races = sorted(g.target_race_date for g in goals if g.target_race_date and g.target_race_date >= today)
+
+    hpw = input.get("hyrox_per_week")
+    if hpw is not None:
+        try:
+            hpw = None if isinstance(hpw, bool) else int(hpw)
+        except (TypeError, ValueError):
+            hpw = None
+        if hpw is None or not 1 <= hpw <= 5:
+            return {"ok": False, "error": "hyrox_per_week debe ser un número entre 1 y 5"}
+    remove, err = _expand_remove_types(input.get("remove_types"))
+    if err:
+        return {"ok": False, "error": err}
+    if hpw is None and not remove:
+        return {"ok": False, "error": "Indica hyrox_per_week (cuántas sesiones de Hyrox por semana) y/o remove_types (qué quitar)."}
+
+    # Sin fecha de fin: "Hyrox por semana" llega hasta el último HYROX del plan (no hasta una
+    # media maratón posterior); quitar sesiones, hasta la última carrera.
+    hyrox_races = sorted(g.target_race_date for g in goals
+                         if hyrox_knowledge.is_hyrox_goal(g) and g.target_race_date and g.target_race_date >= today)
+    default_end = (hyrox_races[-1] if hyrox_races else None) if hpw is not None else None
+    default_end = default_end or (races[-1] if races else today + timedelta(weeks=12))
+    try:
+        start = _parse_date(input["start_date"]) if input.get("start_date") else today
+        end = _parse_date(input["end_date"]) if input.get("end_date") else default_end
+    except Exception as e:
+        return {"ok": False, "error": f"Fecha inválida: {e}"}
+    bad = _check_date(start) or _check_date(end)
+    if bad:
+        return {"ok": False, "error": bad}
+    if end < start:
+        return {"ok": False, "error": "end_date debe ser >= start_date"}
+    lo = max(start, today)                      # el pasado no se toca
+    if end < lo:
+        return {"ok": False, "error": "Todo el rango queda en el pasado"}
+    skip_race_week = input.get("skip_race_week", True) is not False
+
+    first_monday, last_monday = po.week_monday(lo), po.week_monday(end)
+    rows = (
+        db.query(Workout)
+        .filter(
+            Workout.user_id == user.id,
+            Workout.date >= first_monday - timedelta(days=1),
+            Workout.date <= last_monday + timedelta(days=7),
+        )
+        .all()
+    )
+    live = [w for w in rows if w.status != WorkoutStatus.skipped and po.category_of(w.type) != "rest"]
+    occupied: dict[date, list[str]] = {}
+    for w in live:
+        occupied.setdefault(w.date, []).append(po.type_value(w.type))
+
+    # 1) Qué se quita: solo lo PLANIFICADO del rango (lo hecho es historia).
+    removed = [w for w in live if w.status == WorkoutStatus.planned and po.type_value(w.type) in remove and lo <= w.date <= end]
+    for w in removed:
+        occupied[w.date].remove(po.type_value(w.type))
+        if not occupied[w.date]:
+            del occupied[w.date]
+
+    race_days = set(races)
+    race_weeks = {po.week_monday(r) for r in races}
+    thr = ((user.adaptive_paces or {}).get("paces") or {}).get("threshold") if isinstance(user.adaptive_paces, dict) else None
+
+    # 2) Semana a semana: cuántas sesiones de Hyrox hay y cuántas faltan.
+    added: list[Workout] = []
+    per_week: list[dict[str, Any]] = []
+    no_room: list[str] = []
+    race_skipped: list[str] = []
+    variant = 0
+    monday = first_monday
+    while monday <= last_monday:
+        sunday = monday + timedelta(days=6)
+        in_week = [w for w in live if monday <= w.date <= sunday]
+        rem_here = [w for w in removed if monday <= w.date <= sunday]
+        kept = [w for w in in_week if w not in rem_here]
+        new_here: list[Workout] = []
+        deficit = False
+        if hpw is not None:
+            if skip_race_week and monday in race_weeks:
+                race_skipped.append(monday.isoformat())
+            else:
+                hyrox_now = sum(1 for w in kept if po.category_of(w.type) == "hyrox")
+                freed = {w.date for w in rem_here}
+                for _ in range(max(0, hpw - hyrox_now)):
+                    cands = [
+                        monday + timedelta(days=i) for i in range(7)
+                        if lo <= monday + timedelta(days=i) <= end
+                        and (monday + timedelta(days=i)) not in race_days
+                        and (monday + timedelta(days=i)) not in occupied
+                    ]
+                    if not cands:
+                        deficit = True
+                        no_room.append(monday.isoformat())
+                        break
+                    d = min(cands, key=lambda c: (_day_score(c, occupied, freed), c))
+                    next_race = next((r for r in races if r >= d), None)
+                    weeks_to_race = (po.week_monday(next_race) - po.week_monday(d)).days // 7 if next_race else None
+                    session = hyrox_wods.build_session(
+                        _hyrox_division_key(user, goals, d), variant=variant, weeks_to_race=weeks_to_race, threshold_pace=thr,
+                    )
+                    variant += 1
+                    w = Workout(
+                        user_id=user.id,
+                        goal_id=_goal_id_for_date(user, db, d),
+                        date=d,
+                        day_of_week=d.weekday(),
+                        type=WorkoutType(session["type"]),
+                        status=WorkoutStatus.planned,
+                        instructions=session["instructions"],
+                        structure=wod_structure.sanitize(session["structure"]),
+                        modified_by="user",
+                    )
+                    wod_duration.apply_to_workout(w)
+                    occupied.setdefault(d, []).append(session["type"])
+                    new_here.append(w)
+        if rem_here or new_here or deficit:
+            per_week.append({"monday": monday, "before": in_week, "removed": rem_here, "kept": kept, "added": new_here})
+        added.extend(new_here)
+        monday += timedelta(days=7)
+
+    if not removed and not added:
+        return {
+            "ok": True,
+            "added": 0,
+            "removed": 0,
+            "range": {"from": lo.isoformat(), "to": end.isoformat()},
+            "weeks": [],
+            "weeks_without_room": no_room,
+            "weeks_race_skipped": race_skipped,
+            "summary": "Ya estaba así: no hay nada que quitar ni añadir en ese rango"
+                       + (f" (sin hueco en {', '.join(no_room)})" if no_room else ""),
+        }
+
+    for w in removed:
+        db.delete(w)
+    for w in added:
+        db.add(w)
+    db.flush()                                   # ids de las nuevas para el informe
+    db.commit()
+
+    def counts(ws: list[Workout]) -> dict[str, int]:
+        c = {k: 0 for k in po.CATEGORIES}
+        for w in ws:
+            k = po.category_of(w.type)
+            if k in c:
+                c[k] += 1
+        return c
+
+    lines = []
+    for wk in per_week:
+        b, a = counts(wk["before"]), counts(wk["kept"] + wk["added"])
+        cambios = [f"+{weekday_es(w.date)} {w.date.day} {po.type_value(w.type)} (id {w.id})" for w in wk["added"]]
+        cambios += [f"-{weekday_es(w.date)} {w.date.day} {po.type_value(w.type)}" for w in wk["removed"]]
+        lines.append(
+            f"{wk['monday'].isoformat()} · hyrox {b['hyrox']}→{a['hyrox']} · fuerza {b['strength']}→{a['strength']} · run {a['run']}"
+            + (f" · {', '.join(cambios)}" if cambios else "")
+            + (" · SIN HUECO para completar" if wk["monday"].isoformat() in no_room else "")
+        )
+    partes = []
+    if removed:
+        partes.append(f"Quitadas {len(removed)} sesiones ({', '.join(sorted({po.type_value(w.type) for w in removed}))})")
+    if added:
+        partes.append(f"añadidas {len(added)} de Hyrox")
+    resumen = " y ".join(partes) + f": del {lo.isoformat()} al {end.isoformat()}"
+    if hpw is not None:
+        resumen += f", cada semana con {hpw} Hyrox por semana"
+        if race_skipped:
+            resumen += " (semana de carrera sin tocar)"
+    if no_room:
+        resumen += f". SIN HUECO en las semanas {', '.join(no_room)}: todos sus días tienen sesión"
+    return {
+        "ok": True,
+        "mutation": "adapt_weekly_plan",
+        "added": len(added),
+        "removed": len(removed),
+        "range": {"from": lo.isoformat(), "to": end.isoformat()},
+        "weeks": lines,
+        "weeks_without_room": no_room,
+        "weeks_race_skipped": race_skipped,
+        "summary": resumen,
+    }
+
+
 def _tool_set_training_days_per_week(input: dict, user: User, db: Session) -> dict:
     try:
         days = int(input.get("days"))
@@ -1106,6 +1472,8 @@ _DISPATCH = {
     "add_workout": _tool_add_workout,
     "add_recurring_workout": _tool_add_recurring_workout,
     "add_weekly_session": _tool_add_weekly_session,
+    "adapt_weekly_plan": _tool_adapt_weekly_plan,
+    "plan_overview": _tool_plan_overview,
     "set_training_days_per_week": _tool_set_training_days_per_week,
     "mark_workout_status": _tool_mark_workout_status,
     "shift_plan": _tool_shift_plan,

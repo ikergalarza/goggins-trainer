@@ -112,7 +112,7 @@ def test_add_workout_tool_persiste_structure(db, user, soon):
     assert out["ok"]
     w = db.query(Workout).get(out["workout_id"])
     assert w.structure["blocks"][0]["items"][2]["weight_kg"] == 152
-    assert out["workout"]["structure"]["objective"]
+    assert out["workout"]["has_wod"] is True and "structure" not in out["workout"]   # no se devuelve el WOD entero
 
 
 def test_update_workout_tool_actualiza_structure(db, user, soon):
