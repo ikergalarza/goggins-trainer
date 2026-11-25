@@ -98,9 +98,10 @@ def test_las_sesiones_nuevas_son_wods_completos_con_los_pesos_de_su_division(db,
         assert w.goal_id == hyrox.id                                   # antes de la carrera: su bloque
         assert w.date >= HOY and w.date != CARRERA
         assert w.structure and w.structure["blocks"] and w.structure["estimate"]["total_min"] == w.planned_duration_min
-        assert 28 <= w.planned_duration_min <= 65
+        assert 35 <= w.planned_duration_min <= 75
+        assert w.planned_distance_km > 0
         assert w.instructions and "Dobles mixto" in w.instructions
-    assert len({w.instructions.split(":")[0] for w in nuevas}) >= 4     # rotan las plantillas, no son clones
+    assert len({w.instructions.split(":")[0] for w in nuevas}) >= 3     # rotan las plantillas, no son clones
 
 
 def test_la_semana_actual_solo_se_toca_de_hoy_en_adelante_y_aprovecha_el_hueco_del_gym(db, user, plan):
@@ -312,3 +313,28 @@ def test_por_el_chat_una_sola_peticion_deja_todo_el_plan_bien(db, user, plan, mo
     from app.services.goggins_agent import _load_history
     ultimo = [m for m in _load_history(user.id, db) if m["role"] == "assistant"][-1]["content"]
     assert "adapt_weekly_plan ×1" in ultimo and "Registro del sistema" in ultimo
+
+
+def test_antes_de_un_simulacro_la_sesion_nueva_es_de_activacion(db, user, plan):
+    execute_tool("adapt_weekly_plan", REGLA, user, db)
+    sims = {w.date for w in db.query(Workout).filter(Workout.type == WorkoutType.hyrox_sim)}
+    nuevas = db.query(Workout).filter(Workout.modified_by == "user").all()
+    antes = [w for w in nuevas if any(0 < (s - w.date).days <= 2 for s in sims)]
+    assert antes and all(w.instructions.startswith("Activación pre-simulacro") for w in antes)
+    assert any(not w.instructions.startswith("Activación") for w in nuevas)
+
+
+def test_no_repite_trineo_junto_a_la_sesion_de_al_lado(db, user, plan):
+    hyrox, _ = plan
+    # semana 2 (30 nov): el viernes ya hay Hyrox; que ese sea de TRINEO
+    viernes = db.query(Workout).filter(Workout.date == date(2026, 12, 4), Workout.type == WorkoutType.hyrox_stations).one()
+    viernes.structure = {"blocks": [{"format": "rounds", "rounds": 4, "items": [
+        {"exercise": "sled_push", "distance_m": 25, "weight_kg": 152}, {"exercise": "sled_pull", "distance_m": 25, "weight_kg": 103}]}]}
+    db.commit()
+    execute_tool("adapt_weekly_plan", REGLA, user, db)
+    nueva = [w for w in db.query(Workout).filter(Workout.modified_by == "user")
+             if date(2026, 11, 30) <= w.date <= date(2026, 12, 6)]
+    assert len(nueva) == 1
+    usadas = {i["exercise"] for b in nueva[0].structure["blocks"] for i in b["items"]}
+    if abs((nueva[0].date - viernes.date).days) <= 2:
+        assert not usadas & {"sled_push", "sled_pull"}

@@ -17,7 +17,7 @@ from app.models.goal import Goal
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.models.personal_record import PersonalRecord
 from app.models.strava_activity import StravaActivity
-from app.services import ai_client, current_plan, hyrox_knowledge, record_labels, wod_duration, wod_structure
+from app.services import ai_client, current_plan, hyrox_knowledge, hyrox_wods, record_labels, wod_duration, wod_structure
 from app.services.clock import today_madrid, weekday_es
 from app.services.discipline import discipline_for_strava_type
 from app.services.triathlon import get_triathlon_distance
@@ -692,6 +692,7 @@ def _insert_plan_workouts(
     if goal is not None:
         data = _with_race_day(data, goal, start_monday)
     created = 0
+    inserted: list[Workout] = []
     valid_types = {t.value for t in WorkoutType}
     for week_block in data.get("weekly_plan", []):
         week_idx = int(week_block.get("week", 1))
@@ -723,8 +724,41 @@ def _insert_plan_workouts(
             # escribe la IA a ojo tendía a inflarse); sin WOD se queda la de la IA.
             wod_duration.apply_to_workout(workout)
             db.add(workout)
+            inserted.append(workout)
             created += 1
+    if goal is not None and hyrox_knowledge.is_hyrox_goal(goal):
+        _complete_thin_hyrox(user, goal, inserted)
     return created
+
+
+def _complete_thin_hyrox(user: User, goal: Goal, workouts: list[Workout]) -> int:
+    """Sustituye las sesiones de estaciones flojas (menos de 3 estaciones o de ~50') por una
+    sesión completa elegida según las de al lado. No toca simulacros ni la última semana
+    antes de la carrera (ahí las sesiones son cortas a propósito)."""
+    paces = (user.adaptive_paces or {}).get("paces") if isinstance(user.adaptive_paces, dict) else None
+    hyrox = [w for w in workouts if w.type in (WorkoutType.hyrox_stations, WorkoutType.hyrox_sim)]
+    replaced = 0
+    for w in sorted(hyrox, key=lambda x: x.date):
+        race = goal.target_race_date
+        if w.type != WorkoutType.hyrox_stations or (race and (race - w.date).days <= 7):
+            continue
+        if not hyrox_wods.is_thin(w.structure):
+            continue
+        weeks_to_race = ((race - timedelta(days=race.weekday())) - (w.date - timedelta(days=w.date.weekday()))).days // 7 if race else None
+        near = [(o.date, o.type.value, o.structure) for o in hyrox if o is not w]
+        session = hyrox_wods.build_session(
+            hyrox_knowledge.division_key(goal, user), variant=hyrox_wods.choose_variant(w.date, near, replaced),
+            weeks_to_race=weeks_to_race, threshold_pace=(paces or {}).get("threshold"),
+            kind=hyrox_wods.choose_kind(w.date, near, weeks_to_race),
+        )
+        w.structure = wod_structure.sanitize(session["structure"])
+        w.instructions = session["instructions"]
+        w.planned_distance_km = session["distance_km"]
+        wod_duration.apply_to_workout(w)
+        replaced += 1
+    if replaced:
+        logger.info(f"[plan_generator] {replaced} sesiones de estaciones completadas (venían cortas)")
+    return replaced
 
 
 def generate_plan_stream(user: User, goal: Goal, db: Session, extra_goals: list[Goal] | None = None) -> Iterator[dict[str, Any]]:

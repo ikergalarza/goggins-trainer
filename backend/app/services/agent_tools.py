@@ -1215,8 +1215,8 @@ def _tool_adapt_weekly_plan(input: dict, user: User, db: Session) -> dict:
         db.query(Workout)
         .filter(
             Workout.user_id == user.id,
-            Workout.date >= first_monday - timedelta(days=1),
-            Workout.date <= last_monday + timedelta(days=7),
+            Workout.date >= first_monday - timedelta(days=2),       # vecinos para elegir la sesión
+            Workout.date <= last_monday + timedelta(days=8),
         )
         .all()
     )
@@ -1270,8 +1270,14 @@ def _tool_adapt_weekly_plan(input: dict, user: User, db: Session) -> dict:
                     d = min(cands, key=lambda c: (_day_score(c, occupied, freed), c))
                     next_race = next((r for r in races if r >= d), None)
                     weeks_to_race = (po.week_monday(next_race) - po.week_monday(d)).days // 7 if next_race else None
+                    # La sesión depende de lo que haya alrededor: activación antes de un simulacro,
+                    # y sin repetir estación pesada junto a la sesión de al lado.
+                    near = [(o.date, po.type_value(o.type), o.structure) for o in live + added + new_here
+                            if o not in removed and po.category_of(o.type) == "hyrox"]
+                    kind = hyrox_wods.choose_kind(d, near, weeks_to_race)
                     session = hyrox_wods.build_session(
-                        _hyrox_division_key(user, goals, d), variant=variant, weeks_to_race=weeks_to_race, threshold_pace=thr,
+                        _hyrox_division_key(user, goals, d), variant=hyrox_wods.choose_variant(d, near, variant),
+                        weeks_to_race=weeks_to_race, threshold_pace=thr, kind=kind,
                     )
                     variant += 1
                     w = Workout(
@@ -1282,6 +1288,7 @@ def _tool_adapt_weekly_plan(input: dict, user: User, db: Session) -> dict:
                         type=WorkoutType(session["type"]),
                         status=WorkoutStatus.planned,
                         instructions=session["instructions"],
+                        planned_distance_km=session["distance_km"],
                         structure=wod_structure.sanitize(session["structure"]),
                         modified_by="user",
                     )

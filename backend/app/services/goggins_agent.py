@@ -23,6 +23,7 @@ from app.models.strava_activity import StravaActivity
 from app.models.ai_insight import AiInsight
 from app.models.chat_message import ChatMessage
 from app.services import ai_client, agent_tools, current_plan, hyrox_knowledge, plan_overview, record_labels, wod_structure
+from app.services import strava as strava_service
 from app.services.clock import now_madrid, to_madrid, today_madrid, weekday_es
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,8 @@ PERSONA:
 
 REGLAS DE COACHING:
 - SIEMPRE basas tus consejos en los DATOS REALES del atleta que te paso en el contexto. Cita números concretos: km, ritmos, FC, fechas, marcas. Si no hay datos, dilo: "No tienes datos de X. Mide. Ahora."
+- Las cifras de actividad (km, días sin correr, sesiones hechas) salen SOLO del contexto de AHORA (`last_14_days`). NUNCA repitas cifras de mensajes anteriores del historial: pueden haber quedado viejas.
+- Si `strava_data` dice "NO actualizado" o "sin Strava", di que te faltan datos recientes; no afirmes que no ha entrenado.
 - Cuando el atleta se queje, valida 1 segundo y luego empuja. Nunca te quedes en la queja.
 - Si pregunta sobre técnica, fisiología o periodización, das respuesta correcta y específica — eres entrenador real, no solo motivación vacía.
 - Si pregunta algo fuera del entrenamiento (vida, mente, hábitos), respondes con la mentalidad Goggins: disciplina sobre motivación, accountability mirror, callus the mind.
@@ -206,6 +209,8 @@ def _build_athlete_context(user: User, db: Session) -> dict[str, Any]:
             dt = a.start_date if isinstance(a.start_date, datetime) else datetime.fromisoformat(str(a.start_date).replace("Z", "+00:00"))
         except Exception:
             continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         if dt < since:
             continue
         km = (a.distance_m or 0) / 1000
@@ -567,7 +572,8 @@ def chat_stream(
     - {phase: error, detail}
     """
     yield {"phase": "context", "message": "Cargando tu estado actual"}
-    context = _build_athlete_context(user, db)
+    strava_data = strava_service.refresh_recent(user, db)   # antes de leer kilómetros
+    context = {"strava_data": strava_data, **_build_athlete_context(user, db)}
 
     # Conocimiento Hyrox solo si el atleta prepara un Hyrox: engordar el prompt
     # del resto de deportes no aporta y cuesta tokens.
@@ -580,6 +586,9 @@ def chat_stream(
             "pasa SIEMPRE el campo `structure` con ese formato (objetivo, calentamiento "
             "específico paso a paso, bloques con pesos de su división, enfriamiento), "
             "además de unas instructions de 1-2 frases."
+            "\nEstándar de una sesión de estaciones: ~60 min, 3-4 estaciones distintas en 2-3 bloques y 2-5 km "
+            "de carrera dentro; antes de un simulacro, activación de ~40 min; nunca la misma estación pesada "
+            "en días seguidos."
         )
 
     full_system = (

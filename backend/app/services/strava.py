@@ -320,3 +320,60 @@ def sync_activities(user: User, db: Session, pages: int = 2) -> int:
 
     logger.info(f"[sync_activities] Sync completada: {new_count} actividades nuevas")
     return new_count
+
+
+# --- Datos al día sin depender del botón ---------------------------------------
+
+# Cuándo se trajo la actividad de cada usuario (memoria del proceso: basta para no
+# llamar a Strava en cada mensaje del chat).
+_last_refresh: dict[int, float] = {}
+_REFRESH_EVERY_S = 300
+
+_AL_DIA = "al día (sincronizado hace menos de 5 minutos)"
+
+
+def process_new_activities(user: User, db: Session) -> int:
+    """Tras sincronizar: empareja con lo planificado y recalcula ritmos. Best-effort,
+    nunca lanza. Devuelve cuántos workouts quedaron emparejados."""
+    matched = 0
+    try:
+        from app.services import plan_generator
+        matched = plan_generator.match_strava_to_workouts(user, db)
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[sync] match_strava_to_workouts falló: {e}")
+    try:
+        # Con actividades nuevas puede cambiar la mejor evidencia de ritmos.
+        from app.services import adaptive_paces
+        adaptive_paces.refresh_for_user(user, db)
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[sync] adaptive_paces falló: {e}")
+    return matched
+
+
+def refresh_recent(user: User, db: Session) -> str:
+    """Trae lo último de Strava antes de que Goggins hable de kilómetros. Antes solo se
+    sincronizaba con el botón del Dashboard y llegaba a decir "0 km en 14 días" con tres
+    carreras hechas.
+
+    Devuelve en una frase cuánto fiarse de los datos (va a su contexto). Nunca lanza.
+    """
+    if not user.strava_access_token:
+        return "sin Strava conectado: la app no ve lo que el atleta entrena fuera de ella"
+    user_id = user.id
+    if time.monotonic() - _last_refresh.get(user_id, float("-inf")) < _REFRESH_EVERY_S:
+        return _AL_DIA
+    try:
+        nuevas = sync_activities(user, db, pages=1)
+    except StravaAuthError:
+        db.rollback()
+        return "NO actualizado: la conexión con Strava ha caducado; hay que reconectarla en Perfil"
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[refresh_recent] sin sincronizar user={user_id}: {type(e).__name__}")
+        return "NO actualizado: Strava no ha respondido; pueden faltar entrenos recientes"
+    _last_refresh[user_id] = time.monotonic()
+    if nuevas:
+        process_new_activities(user, db)
+    return _AL_DIA

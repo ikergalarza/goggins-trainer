@@ -199,8 +199,10 @@ def update_workout(workout_id: int, body: WorkoutUpdate, current: User = Depends
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"Tipo inválido: {e}")
     if "structure" in data:
-        from app.services import wod_structure
+        from app.services import wod_duration, wod_structure
         workout.structure = wod_structure.sanitize(data.pop("structure"))
+        # La duración sale del WOD; si además se pide una concreta, se aplica después y manda.
+        wod_duration.apply_to_workout(workout)
     if "date" in data:
         new_date = data.pop("date")
         workout.date = new_date

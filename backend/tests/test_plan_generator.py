@@ -313,3 +313,50 @@ def test_generate_combinado_un_bloque_por_carrera(db, user, monkeypatch):
     assert db.query(Workout).filter(Workout.status == WorkoutStatus.completed).count() == 1
     assert done["workouts_created"] == 6   # 4 de la IA + las 2 carreras
     assert done["weeks"] == 20
+
+
+# ── control de calidad: las sesiones de estaciones flojas se completan ─────────
+
+_POBRE = {"warmup": {"duration_min": 10}, "blocks": [{"title": "P", "format": "rounds", "rounds": 4, "items": [
+    {"exercise": "run", "distance_m": 400}, {"exercise": "sled_push", "distance_m": 25, "weight_kg": 152}]}]}
+
+
+def _plan_hyrox(*sesiones):
+    """sesiones: (semana, dia, tipo, structure)"""
+    semanas = {}
+    for w, d, t, st in sesiones:
+        semanas.setdefault(w, []).append({"day_of_week": d, "type": t, "structure": st, "instructions": "x"})
+    return {"weekly_plan": [{"week": w, "workouts": ws} for w, ws in semanas.items()]}
+
+
+def test_una_sesion_de_estaciones_floja_se_completa_con_una_de_calidad(db, user):
+    from datetime import date as _d
+    from app.models.workout import Workout, WorkoutType
+    g = Goal(user_id=user.id, type=GoalType.hyrox, description="Hyrox", target_race_date=_d(2027, 2, 7), is_active=True)
+    db.add(g); db.commit()
+    data = _plan_hyrox((1, 3, "hyrox_stations", _POBRE),                 # floja
+                       (1, 5, "hyrox_sim", _POBRE),                      # los simulacros no se tocan
+                       (2, 1, "easy_run", None))
+    plan_generator._insert_plan_workouts(db, user, data, _d(2026, 11, 30), g.id, goal=g)
+    db.commit()
+    est = db.query(Workout).filter(Workout.type == WorkoutType.hyrox_stations).one()
+    assert len({i["exercise"] for b in est.structure["blocks"] for i in b["items"] if i["exercise"] != "run"}) >= 3
+    assert est.planned_duration_min >= 35 and est.planned_distance_km > 0
+    assert est.instructions.startswith("Activación")                       # va 2 días antes del simulacro
+    sim = db.query(Workout).filter(Workout.type == WorkoutType.hyrox_sim).one()
+    assert sim.structure["blocks"][0]["items"][1]["exercise"] == "sled_push" and len(sim.structure["blocks"]) == 1
+
+
+def test_la_semana_de_carrera_y_las_sesiones_completas_se_respetan(db, user):
+    from datetime import date as _d
+    from app.models.workout import Workout
+    from app.services import hyrox_wods
+    g = Goal(user_id=user.id, type=GoalType.hyrox, description="Hyrox", target_race_date=_d(2027, 2, 7), is_active=True)
+    db.add(g); db.commit()
+    rica = hyrox_wods.build_session("open_men", variant=1, weeks_to_race=5)["structure"]
+    data = _plan_hyrox((1, 3, "hyrox_stations", rica), (10, 3, "hyrox_stations", _POBRE))   # semana 10 = carrera
+    plan_generator._insert_plan_workouts(db, user, data, _d(2026, 11, 30), g.id, goal=g)
+    db.commit()
+    filas = db.query(Workout).filter(Workout.type == "hyrox_stations").order_by(Workout.date).all()
+    assert filas[0].structure["blocks"][0]["title"] == rica["blocks"][0]["title"] and filas[0].instructions == "x"
+    assert filas[1].instructions == "x" and len(filas[1].structure["blocks"]) == 1

@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
+from app.models.strava_activity import StravaActivity
 from app.models.workout import Workout, WorkoutType, WorkoutStatus
 from app.services.plan_generator import match_strava_to_workouts
 
@@ -78,3 +79,24 @@ def test_no_enlaza_actividad_de_otro_usuario(db, user, other_user, make_workout,
     assert matched == 0
     db.refresh(w)
     assert w.strava_activity_id is None
+
+
+def test_el_boton_de_sincronizar_empareja_lo_nuevo_con_el_plan(db, user, make_workout, monkeypatch):
+    from app.api.routes import strava as strava_routes
+    from app.services import strava as strava_service, workout_feedback
+
+    monkeypatch.setattr(workout_feedback, "generate_for_completed", lambda *a, **k: 0)
+    user.strava_access_token = "token-de-prueba"
+    db.add(user); db.commit()
+    dia = date(2026, 11, 10)
+    make_workout(user, date=dia, day_of_week=dia.weekday(), type=WorkoutType.easy_run)
+
+    def sync(u, s, pages=2):
+        s.add(StravaActivity(user_id=u.id, strava_id=7, type="Run", distance_m=5000,
+                             start_date=datetime(2026, 11, 10, 12, tzinfo=timezone.utc)))
+        s.commit()
+        return 1
+
+    monkeypatch.setattr(strava_service, "sync_activities", sync)
+    res = strava_routes.sync_strava(user_id=user.id, all=False, current=user, db=db)
+    assert res["new_activities"] == 1 and res["matched_workouts"] == 1

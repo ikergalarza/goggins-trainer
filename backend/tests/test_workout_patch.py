@@ -97,3 +97,15 @@ def test_recurring_se_asocia_al_objetivo_activo(db, user):
     assert out["created"] == 3
     rows = db.query(Workout).filter(Workout.type == WorkoutType.mobility).all()
     assert all(r.goal_id == g.id for r in rows)
+
+
+def test_editar_el_wod_recalcula_la_duracion(db, user, make_workout):
+    from app.api.routes.plans import update_workout, WorkoutUpdate
+    w = make_workout(user, planned_duration_min=99)
+    st = {"warmup": {"duration_min": 10}, "blocks": [{"format": "rounds", "rounds": 4, "rest_s": 60,
+          "items": [{"exercise": "run", "distance_m": 400, "pace": "4:40/km"}]}]}
+    out = update_workout(w.id, WorkoutUpdate(structure=st), current=user, db=db)
+    assert out["structure"]["estimate"]["total_min"] == out["planned_duration_min"] != 99
+    # si además se pide una duración concreta, se respeta
+    out = update_workout(w.id, WorkoutUpdate(structure=st, planned_duration_min=70), current=user, db=db)
+    assert out["planned_duration_min"] == 70

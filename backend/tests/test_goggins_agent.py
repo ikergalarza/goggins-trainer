@@ -3,14 +3,16 @@
 Síntomas reales: "se lía con el día que es" y "me dice que lo ha metido y no
 está en el plan" (afirmaba el cambio sin llamar a ninguna herramienta).
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from app.models.chat_message import ChatMessage
 from app.models.goal import Goal, GoalType
+from app.models.strava_activity import StravaActivity
 from app.models.workout import Workout, WorkoutStatus, WorkoutType
-from app.services import goggins_agent
+from app.services import goggins_agent, strava as strava_service, workout_feedback
 
 DOMINGO = date(2026, 11, 22)
 
@@ -516,3 +518,98 @@ def test_detecta_el_compromiso_sin_ejecutar(texto):
 ])
 def test_explicar_no_es_comprometerse(texto):
     assert not goggins_agent.commits_without_doing(texto)
+
+
+def test_las_cifras_de_actividad_salen_del_contexto_no_de_mensajes_viejos():
+    p = goggins_agent.SYSTEM_PROMPT
+    assert "NUNCA repitas cifras de mensajes anteriores" in p and "last_14_days" in p
+    assert "strava_data" in p
+
+
+def test_a_un_atleta_de_hyrox_goggins_le_exige_sesiones_completas(db, user, monkeypatch):
+    g = Goal(user_id=user.id, type=GoalType.hyrox, description="Hyrox", is_active=True)
+    db.add(g); db.commit()
+    llamadas = _fake_ai(monkeypatch, [("Ok.", [_Text("Ok.")], "end_turn")])
+    _correr(user, db, "hola")
+    assert "3-4 estaciones distintas en 2-3 bloques" in llamadas[0]["system"]
+
+
+# --- datos frescos de Strava antes de hablar de kilómetros ----------------------
+# Síntoma real: "0 km en 14 días" con tres carreras hechas. Strava solo se
+# sincronizaba con el botón del Dashboard y Goggins leía datos de hacía dos semanas.
+
+AYER = datetime.now(timezone.utc).replace(hour=12) - timedelta(days=1)
+
+
+@pytest.fixture(autouse=True)
+def _sin_memoria_de_sync(monkeypatch):
+    monkeypatch.setattr(strava_service, "_last_refresh", {}, raising=False)
+    monkeypatch.setattr(workout_feedback, "generate_for_completed", lambda *a, **k: 0)
+
+
+def _conectar_strava(db, user):
+    user.strava_access_token = "token-de-prueba"
+    user.strava_refresh_token = "refresh-de-prueba"
+    user.strava_token_expires_at = 4_000_000_000
+    db.add(user); db.commit()
+
+
+def _sync_que_trae_una_carrera(monkeypatch):
+    llamadas: list[int] = []
+
+    def sync(u, s, pages=2):
+        llamadas.append(pages)
+        if len(llamadas) > 1:
+            return 0
+        s.add(StravaActivity(user_id=u.id, strava_id=1, type="Run", distance_m=8000,
+                             moving_time_s=2700, start_date=AYER))
+        s.commit()
+        return 1
+
+    monkeypatch.setattr(strava_service, "sync_activities", sync)
+    return llamadas
+
+
+def test_antes_de_responder_trae_lo_ultimo_de_strava(db, user, monkeypatch):
+    _conectar_strava(db, user)
+    sincronizaciones = _sync_que_trae_una_carrera(monkeypatch)
+    llamadas = _fake_ai(monkeypatch, [("Ok.", [_Text("Ok.")], "end_turn")] * 2)
+
+    _correr(user, db, "¿cómo voy?")
+    assert '"total_km": 8.0' in llamadas[0]["system"]
+    assert '"strava_data": "al día' in llamadas[0]["system"]
+
+    _correr(user, db, "¿y ahora?")
+    assert len(sincronizaciones) == 1                      # no se llama a Strava en cada mensaje
+
+
+def test_lo_recien_sincronizado_se_marca_como_hecho_en_el_plan(db, user, make_workout, monkeypatch):
+    _conectar_strava(db, user)
+    w = make_workout(user, date=AYER.date(), day_of_week=AYER.weekday(), type=WorkoutType.easy_run)
+    _sync_que_trae_una_carrera(monkeypatch)
+    _fake_ai(monkeypatch, [("Ok.", [_Text("Ok.")], "end_turn")])
+
+    _correr(user, db, "¿cómo voy?")
+    db.refresh(w)
+    assert w.status == WorkoutStatus.completed
+
+
+def test_si_strava_falla_el_chat_sigue_y_goggins_sabe_que_faltan_datos(db, user, monkeypatch):
+    _conectar_strava(db, user)
+
+    def falla(u, s, pages=2):
+        raise httpx.ConnectTimeout("lento")
+
+    monkeypatch.setattr(strava_service, "sync_activities", falla)
+    llamadas = _fake_ai(monkeypatch, [("Ok.", [_Text("Ok.")], "end_turn")])
+    eventos = _correr(user, db, "¿cómo voy?")
+
+    assert eventos[-1]["phase"] == "done"
+    assert '"strava_data": "NO actualizado' in llamadas[0]["system"]
+    assert db.query(ChatMessage).filter_by(role="user").count() == 1
+
+
+def test_sin_strava_goggins_sabe_que_no_ve_lo_entrenado_fuera(db, user, monkeypatch):
+    llamadas = _fake_ai(monkeypatch, [("Ok.", [_Text("Ok.")], "end_turn")])
+    _correr(user, db, "¿cómo voy?")
+    assert '"strava_data": "sin Strava' in llamadas[0]["system"]

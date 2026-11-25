@@ -201,20 +201,7 @@ def sync_strava(
         logger.exception(f"[sync] Error durante sync: {e}")
         raise HTTPException(status_code=500, detail=f"Error inesperado al sincronizar: {e}")
 
-    # Empareja con workouts planificados (best-effort, no rompe la sync si falla)
-    matched = 0
-    try:
-        from app.services import plan_generator
-        matched = plan_generator.match_strava_to_workouts(user, db)
-    except Exception as e:
-        logger.warning(f"[sync] match_strava_to_workouts falló: {e}")
-
-    # Ritmos adaptativos: con actividades nuevas puede cambiar la mejor evidencia.
-    try:
-        from app.services import adaptive_paces
-        adaptive_paces.refresh_for_user(user, db)
-    except Exception as e:
-        logger.warning(f"[sync] adaptive_paces falló: {e}")
+    matched = strava_service.process_new_activities(user, db)   # best-effort, no rompe la sync
 
     logger.info(f"[sync] Sync completada: {new_count} nuevas, {matched} workouts emparejados")
     return {"message": "Sincronización completada", "new_activities": new_count, "matched_workouts": matched}
