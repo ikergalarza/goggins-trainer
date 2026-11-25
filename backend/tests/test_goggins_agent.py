@@ -267,7 +267,7 @@ def test_una_promesa_sin_ejecutar_ni_preguntar_tambien_se_corrige(db, user, monk
     ])
     eventos = _correr(user, db, "mete un día más de entrenamiento a la semana")
     assert {"phase": "retract"} in eventos
-    assert "ejecutar ninguna herramienta ni hacerle una pregunta" in llamadas[1]["messages"][-1]["content"]
+    assert "ni hacerle una pregunta" in llamadas[1]["messages"][-1]["content"]
     assert db.query(Workout).count() == 1
     assert eventos[-1]["content"] == "Viernes 27 metido."
 
@@ -471,3 +471,48 @@ def test_toda_herramienta_nueva_esta_clasificada_como_de_lectura_o_de_edicion():
     todas = {t["name"] for t in agent_tools.TOOLS}
     assert solo_lectura <= todas
     assert goggins_agent.MUTATING_TOOLS == todas - solo_lectura
+
+
+# --- consulta, promete y no hace: la captura del 25-11 -------------------------
+
+PROMESA_TRAS_LEER = ("Ocho semanas con un solo Hyrox. Tenías toda la razón. "
+                     "Lo arreglo AHORA con un segundo Hyrox en cada una. Y no hay ningún gym que quitar.")
+
+
+def test_prometer_despues_de_consultar_tambien_obliga_a_ejecutar(db, user, monkeypatch):
+    llamadas = _fake_ai(monkeypatch, [
+        ("", [_ToolUse("t1", "list_workouts", {})], "tool_use"),
+        (PROMESA_TRAS_LEER, [_Text(PROMESA_TRAS_LEER)], "end_turn"),
+        ("", [_ToolUse("t2", "add_workout", {"date": "2026-11-27", "type": "hyrox_stations"})], "tool_use"),
+        ("Hecho.", [_Text("Hecho.")], "end_turn"),
+    ])
+    eventos = _correr(user, db, "pero te faltan todo el resto de semanas, añade el segundo hyrox")
+    assert {"phase": "retract"} in eventos and len(llamadas) == 4
+    assert db.query(Workout).count() == 1
+
+
+@pytest.mark.parametrize("texto", [
+    "continúa", "Continua", "sigue", "hazlo", "aplícalo", "aplica lo nuevo que te he dicho entonces",
+    "los has añadido ya?", "¿lo has cambiado?",
+])
+def test_los_seguimientos_de_una_peticion_cuentan_como_peticion(texto):
+    assert goggins_agent.asks_plan_change(texto)
+
+
+@pytest.mark.parametrize("texto", [
+    "Lo arreglo AHORA con un segundo Hyrox en cada una.",
+    "Voy a añadir el segundo Hyrox en cada semana.",
+    "Ahora los meto todos.",
+    "Te lo monto ya.",
+])
+def test_detecta_el_compromiso_sin_ejecutar(texto):
+    assert goggins_agent.commits_without_doing(texto)
+
+
+@pytest.mark.parametrize("texto", [
+    "Ya tienes entreno todos los días de esa semana.",
+    "Esa semana lleva dos Hyrox, no hace falta tocar nada.",
+    "No voy a meter más carga: sería lesionarte.",
+])
+def test_explicar_no_es_comprometerse(texto):
+    assert not goggins_agent.commits_without_doing(texto)

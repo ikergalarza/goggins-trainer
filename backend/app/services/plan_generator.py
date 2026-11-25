@@ -523,7 +523,7 @@ def _prompts_for_goal(goal: Goal, user: User, weeks: int, context: dict[str, Any
     return system_prompt, user_message, per_week
 
 
-def _stream_ai(system_prompt: str, user_message: str, max_tokens: int, out: dict[str, Any], chars_base: int = 0) -> Iterator[dict[str, Any]]:
+def _stream_ai(db: Session, system_prompt: str, user_message: str, max_tokens: int, out: dict[str, Any], chars_base: int = 0) -> Iterator[dict[str, Any]]:
     """Llama a Claude en streaming re-emitiendo eventos; deja raw/stop_reason en `out`.
 
     `chars_base` acumula los caracteres de llamadas anteriores (plan por
@@ -531,6 +531,8 @@ def _stream_ai(system_prompt: str, user_message: str, max_tokens: int, out: dict
     """
     client = ai_client.get_client()
     raw_parts: list[str] = []
+    # La IA puede tardar minutos: no se espera con la transacción abierta (bloqueaba despliegues).
+    db.commit()
     with client.messages.stream(
         model=ai_client.DEFAULT_MODEL,
         max_tokens=max_tokens,
@@ -763,7 +765,7 @@ def generate_plan_stream(user: User, goal: Goal, db: Session, extra_goals: list[
 
     out: dict[str, Any] = {}
     try:
-        yield from _stream_ai(system_prompt, user_message, max_tokens, out)
+        yield from _stream_ai(db, system_prompt, user_message, max_tokens, out)
     except Exception as e:
         logger.exception(f"[plan_generator] stream falló: {e}")
         yield {"phase": "error", "detail": f"Error llamando a Claude: {e}"}
@@ -875,7 +877,7 @@ def _generate_combined_stream(user: User, races: list[Goal], db: Session) -> Ite
         max_tokens = min(24000, 6000 + b["weeks"] * per_week)
         out: dict[str, Any] = {}
         try:
-            yield from _stream_ai(system_prompt, pre + "\n\n" + user_message, max_tokens, out, chars_base)
+            yield from _stream_ai(db, system_prompt, pre + "\n\n" + user_message, max_tokens, out, chars_base)
         except Exception as e:
             logger.exception(f"[plan_generator] stream bloque {i} falló: {e}")
             yield {"phase": "error", "detail": f"Error llamando a Claude (bloque {i}): {e}. Tu plan anterior sigue intacto."}

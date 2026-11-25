@@ -148,11 +148,22 @@ export default function ChatPanel({ variant = 'page' }: ChatPanelProps) {
 
     const url = `${API_BASE}/api/chat/${effectiveUserId}/send_stream`
 
+    // Nada de esperar para siempre: si pasan 4 minutos sin recibir nada, se corta y se avisa.
+    const controller = new AbortController()
+    let watchdog: ReturnType<typeof setTimeout> | undefined
+    const arm = () => {
+      clearTimeout(watchdog)
+      watchdog = setTimeout(() => controller.abort(), 240_000)
+    }
+    let hadMutation = false
+
     try {
+      arm()
       const res = await fetch(url, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ message }),
+        signal: controller.signal,
       })
       if (!res.ok || !res.body) {
         throw new Error(`HTTP ${res.status}`)
@@ -163,11 +174,12 @@ export default function ChatPanel({ variant = 'page' }: ChatPanelProps) {
       let buffer = ''
       let accumulated = ''
       let tools: ToolEvent[] = []
-      let hadMutation = false
+      let finished = false
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        arm()
         buffer += decoder.decode(value, { stream: true })
 
         const events = buffer.split('\n\n')
@@ -207,6 +219,7 @@ export default function ChatPanel({ variant = 'page' }: ChatPanelProps) {
           } else if (payload.phase === 'mutation') {
             hadMutation = true
           } else if (payload.phase === 'done') {
+            finished = true
             setMessages(prev => [...prev, {
               role: 'assistant',
               content: payload.content || accumulated,
@@ -214,20 +227,28 @@ export default function ChatPanel({ variant = 'page' }: ChatPanelProps) {
             }])
             setStreamText('')
             setStreamTools([])
-            if (hadMutation) {
-              window.dispatchEvent(new CustomEvent('plan-mutated'))
-            }
           } else if (payload.phase === 'error') {
             throw new Error(payload.detail || 'Error desconocido')
           }
         }
       }
+      if (!finished) {
+        // El servidor cerró sin terminar (p. ej. un reinicio a media respuesta).
+        throw new Error('Se cortó la conexión con Goggins antes de terminar. Lo que llegó a hacer está guardado: revisa el plan y escribe «continúa».')
+      }
     } catch (e: any) {
-      setError(e?.message || String(e))
+      setError(
+        controller.signal.aborted
+          ? 'Goggins lleva demasiado sin responder. Lo que llegó a hacer está guardado: revisa el plan y escribe «continúa».'
+          : e?.message || String(e),
+      )
       setStreamText('')
       setStreamTools([])
     } finally {
+      clearTimeout(watchdog)
       setStreaming(false)
+      // Aunque se cortase, si algo cambió en el plan hay que refrescarlo.
+      if (hadMutation) window.dispatchEvent(new CustomEvent('plan-mutated'))
     }
   }
 

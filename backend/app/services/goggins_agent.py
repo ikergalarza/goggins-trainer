@@ -459,11 +459,32 @@ _ASKS_RE = re.compile(
     r"cambia(?:me|lo|la)?|ajusta(?:me|lo|la)?|desplaza|programa(?:me)?|apunta(?:me)?|sustituye|reemplaza)\b"
     r"|\b(?:sube|baja|reduce|aumenta)(?:me)?\s+(?:la|el|los|las)\s+(?:carga|volumen|intensidad|km|kil[oó]metros|semana)"
     r"|\b(?:quiero|necesito)\s+(?:entrenar|un|otro|m[aá]s)\b"
-    r"|un d[ií]a m[aá]s|otro d[ií]a de entreno|m[aá]s d[ií]as de entreno",
+    r"|un d[ií]a m[aá]s|otro d[ií]a de entreno|m[aá]s d[ií]as de entreno"
+    # seguimientos de una petición anterior: "continúa", "hazlo", "¿los has añadido ya?"
+    r"|\b(?:contin[uú]a|sigue|hazlo|apl[ií]ca(?:lo|la)?)\b"
+    r"|\b(?:lo|la|los|las)\s+has\s+(?:a[ñn]adido|metido|puesto|hecho|cambiado|quitado|borrado|movido|ajustado|aplicado)\b",
     re.I,
 )
 # Una pregunta explícita o un ofrecimiento ("si quieres lo hago") no es una promesa incumplida.
 _QUESTION_OR_OFFER_RE = re.compile(r"¿|\b(?:d[ií]melo|dime\s+si|si\s+quieres|si\s+prefieres|av[ií]same)\b", re.I)
+
+
+_COMMIT_RES = [
+    re.compile(r"\b(?:lo|la|los|las|te\s+(?:lo|la|los|las))\s+(?:arreglo|meto|pongo|a[ñn]ado|muevo|cambio|ajusto|borro|elimino|creo|programo|monto|apa[ñn]o|soluciono|hago|reconstruyo)\b", re.I),
+    re.compile(r"\bvoy\s+a\s+(?:meter|a[ñn]adir|poner|mover|cambiar|ajustar|borrar|eliminar|crear|arreglar|montar|reconstruir|aplicar)", re.I),
+    re.compile(r"\b(?:ahora|ya)\s+(?:mismo\s+)?(?:lo\s+|la\s+|los\s+|las\s+)?(?:arreglo|meto|a[ñn]ado|aplico|creo|monto|reconstruyo)\b", re.I),
+]
+
+
+def commits_without_doing(text: str) -> bool:
+    """True si el texto PROMETE hacer el cambio ("lo arreglo ahora", "voy a añadir…"), sin negaciones ni ofrecimientos."""
+    for sentence in re.split(r"(?<=[.!?\n:])\s+", text or ""):
+        sentence = sentence.strip()
+        if not sentence or _HEDGE_RE.search(sentence):
+            continue
+        if any(rx.search(sentence) for rx in _COMMIT_RES):
+            return True
+    return False
 
 
 def claims_plan_change(text: str) -> bool:
@@ -497,9 +518,9 @@ _GUARD_MESSAGE = (
 )
 _PROMISE_MESSAGE = (
     "[SISTEMA] El atleta te ha pedido un cambio en el plan y has terminado el turno sin ejecutar ninguna herramienta "
-    "ni hacerle una pregunta, así que el plan NO ha cambiado. Ejecuta AHORA la herramienta que corresponda (mira "
-    "`calendar` del contexto para las fechas). Si te falta un dato imprescindible, PREGÚNTALO con una pregunta "
-    "explícita (¿...?). No prometas cambios: o los ejecutas o preguntas."
+    "de edición ni hacerle una pregunta, así que el plan NO ha cambiado. Ejecuta AHORA la herramienta que corresponda "
+    "(para una regla de varias semanas, `adapt_weekly_plan`; mira `calendar` para las fechas). Si te falta un dato "
+    "imprescindible, PREGÚNTALO con una pregunta explícita (¿...?). No prometas cambios: o los ejecutas o preguntas."
 )
 _NO_CHANGE_NOTICE = (
     "\n\nAviso: No he ejecutado ningún cambio en tu plan. Pídemelo otra vez con el día exacto y lo hago."
@@ -598,6 +619,9 @@ def chat_stream(
         for iteration in range(MAX_TOOL_ITERATIONS):
             iteration_text: list[str] = []
 
+            # Suelta la transacción antes de esperar a la IA (pueden ser minutos): tenerla
+            # abierta bloqueaba las migraciones de un despliegue y, detrás, al resto de consultas.
+            db.commit()
             with client.messages.stream(
                 model=ai_client.DEFAULT_MODEL,
                 max_tokens=CHAT_MAX_TOKENS,
@@ -640,11 +664,12 @@ def chat_stream(
             if final_msg.stop_reason != "tool_use":
                 texto = "".join(iteration_text)
                 afirma = wants_change and claims_plan_change(texto)
-                # Promesa implícita ("empezamos ya"): le pidieron un cambio y terminó el turno
-                # sin tocar ninguna tool ni preguntar nada.
+                # Promesa sin cumplir: le pidieron un cambio y termina sin preguntar nada, o bien
+                # sin tocar ninguna tool ("empezamos ya") o bien prometiendo hacerlo después de
+                # solo consultar ("lo arreglo AHORA").
                 promete = (
-                    wants_change and tool_calls == 0 and bool(texto.strip())
-                    and not _QUESTION_OR_OFFER_RE.search(texto)
+                    wants_change and bool(texto.strip()) and not _QUESTION_OR_OFFER_RE.search(texto)
+                    and (tool_calls == 0 or commits_without_doing(texto))
                 )
                 if (afirma or promete) and not changed_plan:
                     if not retried:

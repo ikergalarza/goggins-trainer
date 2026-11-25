@@ -1,4 +1,5 @@
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
@@ -14,13 +15,19 @@ import app.models  # noqa
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
 
+def _run_backfills() -> None:
+    """Recálculos de datos ya generados (cada uno captura sus propios errores)."""
+    backfill_wod_durations()
+    backfill_race_days()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_schema(engine)
     seed_master()
-    backfill_wod_durations()
-    backfill_race_days()
+    # En segundo plano: no deben retrasar el healthcheck del despliegue.
+    threading.Thread(target=_run_backfills, name="backfills", daemon=True).start()
     yield
 
 
